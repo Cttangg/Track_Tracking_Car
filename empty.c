@@ -178,8 +178,14 @@ int main(void)
     UART_Puts(&g_uart0, "\r\nDual Motor Control Ready\r\n");   /* 前导换行隔开复位瞬态乱码 */
     cmd_show();
 
-    /* 直行: 0.1 m/s 前进 0.5 m, 到达后自动停车 */
-    trajectory_circle(0.5,0.5,1);
+    /*
+     * ====== 测试代码 (取消注释一项即可) =====
+     */
+    trajectory_straight(1.0f, 0.1f);              // 直线前进 1m @ 0.1m/s
+    /* trajectory_straight(0.5f, 0.2f); */        // 直线前进 0.5m 稍快
+    /* trajectory_circle(0.5f, 0.1f, +1); */      // 左转圈 R=0.5m
+    /* trajectory_circle(0.5f, 0.1f, -1); */      // 右转圈 R=0.5m
+    /* trajectory_arc(0.3f,3.1416f,0.1f,+1); */   // 半圆左转 R=0.3m
 
     while (1) {
         cmd_poll();

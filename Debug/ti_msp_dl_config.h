@@ -187,10 +187,10 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define DC_Motor_BIN2_PORT                                               (GPIOB)
 #define DC_Motor_BIN2_PIN                                        (DL_GPIO_PIN_3)
 #define DC_Motor_BIN2_IOMUX                                      (IOMUX_PINCM16)
-/* Defines for PIN_0: GPIOB.16 with pinCMx 33 on package pin 26 */
-#define GPIO_SENSOR_PIN_0_PORT                                           (GPIOB)
-#define GPIO_SENSOR_PIN_0_PIN                                   (DL_GPIO_PIN_16)
-#define GPIO_SENSOR_PIN_0_IOMUX                                  (IOMUX_PINCM33)
+/* Defines for PIN_0: GPIOA.15 with pinCMx 37 on package pin 30 */
+#define GPIO_SENSOR_PIN_0_PORT                                           (GPIOA)
+#define GPIO_SENSOR_PIN_0_PIN                                   (DL_GPIO_PIN_15)
+#define GPIO_SENSOR_PIN_0_IOMUX                                  (IOMUX_PINCM37)
 /* Defines for PIN_1: GPIOA.25 with pinCMx 55 on package pin 45 */
 #define GPIO_SENSOR_PIN_1_PORT                                           (GPIOA)
 #define GPIO_SENSOR_PIN_1_PIN                                   (DL_GPIO_PIN_25)
@@ -199,14 +199,14 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define GPIO_SENSOR_PIN_2_PORT                                           (GPIOA)
 #define GPIO_SENSOR_PIN_2_PIN                                   (DL_GPIO_PIN_23)
 #define GPIO_SENSOR_PIN_2_IOMUX                                  (IOMUX_PINCM53)
-/* Defines for PIN_3: GPIOB.9 with pinCMx 26 on package pin 23 */
+/* Defines for PIN_3: GPIOB.18 with pinCMx 44 on package pin 37 */
 #define GPIO_SENSOR_PIN_3_PORT                                           (GPIOB)
-#define GPIO_SENSOR_PIN_3_PIN                                    (DL_GPIO_PIN_9)
-#define GPIO_SENSOR_PIN_3_IOMUX                                  (IOMUX_PINCM26)
-/* Defines for PIN_4: GPIOB.7 with pinCMx 24 on package pin 21 */
-#define GPIO_SENSOR_PIN_4_PORT                                           (GPIOB)
-#define GPIO_SENSOR_PIN_4_PIN                                    (DL_GPIO_PIN_7)
-#define GPIO_SENSOR_PIN_4_IOMUX                                  (IOMUX_PINCM24)
+#define GPIO_SENSOR_PIN_3_PIN                                   (DL_GPIO_PIN_18)
+#define GPIO_SENSOR_PIN_3_IOMUX                                  (IOMUX_PINCM44)
+/* Defines for PIN_4: GPIOA.18 with pinCMx 40 on package pin 33 */
+#define GPIO_SENSOR_PIN_4_PORT                                           (GPIOA)
+#define GPIO_SENSOR_PIN_4_PIN                                   (DL_GPIO_PIN_18)
+#define GPIO_SENSOR_PIN_4_IOMUX                                  (IOMUX_PINCM40)
 /* Defines for PIN_5: GPIOA.22 with pinCMx 47 on package pin 40 */
 #define GPIO_SENSOR_PIN_5_PORT                                           (GPIOA)
 #define GPIO_SENSOR_PIN_5_PIN                                   (DL_GPIO_PIN_22)
@@ -215,10 +215,10 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define GPIO_SENSOR_PIN_6_PORT                                           (GPIOB)
 #define GPIO_SENSOR_PIN_6_PIN                                   (DL_GPIO_PIN_19)
 #define GPIO_SENSOR_PIN_6_IOMUX                                  (IOMUX_PINCM45)
-/* Defines for PIN_7: GPIOB.17 with pinCMx 43 on package pin 36 */
-#define GPIO_SENSOR_PIN_7_PORT                                           (GPIOB)
-#define GPIO_SENSOR_PIN_7_PIN                                   (DL_GPIO_PIN_17)
-#define GPIO_SENSOR_PIN_7_IOMUX                                  (IOMUX_PINCM43)
+/* Defines for PIN_7: GPIOA.26 with pinCMx 59 on package pin 46 */
+#define GPIO_SENSOR_PIN_7_PORT                                           (GPIOA)
+#define GPIO_SENSOR_PIN_7_PIN                                   (DL_GPIO_PIN_26)
+#define GPIO_SENSOR_PIN_7_IOMUX                                  (IOMUX_PINCM59)
 
 
 /* clang-format on */

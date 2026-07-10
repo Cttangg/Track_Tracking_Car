@@ -10,13 +10,14 @@
 
 #define PI_F           3.1415926f
 
-/* 电机 ID 与左右轮映射 (按接线调整) */
-#define MOTOR_L_ID     1
-#define MOTOR_R_ID     2
+/* 电机 ID 与左右轮映射 (按接线调整)
+ * 后驱车: 电机1=右后轮, 电机2=左后轮 */
+#define MOTOR_L_ID     2
+#define MOTOR_R_ID     1
 
-/* 轮转向符号: 若某轮正 RPM 使小车后退, 改为 -1 翻转 */
-#define MOTOR_L_SIGN   (+1)
-#define MOTOR_R_SIGN   (+1)
+/* 轮转向符号: 正 RPM = 后退, 改为 -1 使正线速度映射为负 RPM = 前进 */
+#define MOTOR_L_SIGN   (-1)
+#define MOTOR_R_SIGN   (-1)
 
 /* v(m/s) -> 电机轴 RPM 的转换系数 */
 #define MPS_TO_MOTOR_RPM  (60.0f / (2.0f * PI_F * WHEEL_RADIUS) * GEAR_RATIO)
