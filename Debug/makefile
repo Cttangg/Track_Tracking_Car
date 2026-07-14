@@ -14,7 +14,10 @@ ORDERED_OBJS += \
 "./ti_msp_dl_config.o" \
 "./startup_mspm0g350x_ticlang.o" \
 "./Drivers/grayscale.o" \
+"./Drivers/gyro_pid.o" \
+"./Drivers/line_pid.o" \
 "./Drivers/motor.o" \
+"./Drivers/steering.o" \
 "./Drivers/trajectory.o" \
 "./Drivers/uart.o" \
 $(GEN_CMDS__FLAG) \
@@ -142,8 +145,8 @@ Track_Tracking_Car.out: $(OBJS) $(GEN_CMDS)
 # Other Targets
 clean:
 	-$(RM) $(GEN_MISC_FILES__QUOTED)$(GEN_FILES__QUOTED)$(EXE_OUTPUTS__QUOTED)
-	-$(RM) "empty.o" "ti_msp_dl_config.o" "startup_mspm0g350x_ticlang.o" "Drivers\grayscale.o" "Drivers\motor.o" "Drivers\trajectory.o" "Drivers\uart.o" 
-	-$(RM) "empty.d" "ti_msp_dl_config.d" "startup_mspm0g350x_ticlang.d" "Drivers\grayscale.d" "Drivers\motor.d" "Drivers\trajectory.d" "Drivers\uart.d" 
+	-$(RM) "empty.o" "ti_msp_dl_config.o" "startup_mspm0g350x_ticlang.o" "Drivers\grayscale.o" "Drivers\gyro_pid.o" "Drivers\line_pid.o" "Drivers\motor.o" "Drivers\steering.o" "Drivers\trajectory.o" "Drivers\uart.o" 
+	-$(RM) "empty.d" "ti_msp_dl_config.d" "startup_mspm0g350x_ticlang.d" "Drivers\grayscale.d" "Drivers\gyro_pid.d" "Drivers\line_pid.d" "Drivers\motor.d" "Drivers\steering.d" "Drivers\trajectory.d" "Drivers\uart.d" 
 	-@echo ' '
 
 .PHONY: all clean dependents

@@ -1,6 +1,7 @@
 # FIXED
 
-empty.o: ../empty.c \
+Drivers/line_pid.o: ../Drivers/line_pid.c ../Drivers/line_pid.h \
+ ../Drivers/grayscale.h \
  ti_msp_dl_config.h \
  C:/TI/mspm0_sdk_2_10_00_04/source/ti/devices/msp/msp.h \
  C:/TI/mspm0_sdk_2_10_00_04/source/ti/devices/DeviceFamily.h \
@@ -83,10 +84,9 @@ empty.o: ../empty.c \
  C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/dl_vref.h \
  C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/dl_wwdt.h \
  C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_interrupt.h \
- C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_systick.h \
- ../Drivers/motor_control.h ../Drivers/trajectory.h \
- ../Drivers/grayscale.h ../Drivers/steering.h \
- ../Drivers/line_pid.h ../Drivers/gyro_pid.h ../Drivers/uart.h
+ C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_systick.h
+../Drivers/line_pid.h:
+../Drivers/grayscale.h:
 ti_msp_dl_config.h:
 C:/TI/mspm0_sdk_2_10_00_04/source/ti/devices/msp/msp.h:
 C:/TI/mspm0_sdk_2_10_00_04/source/ti/devices/DeviceFamily.h:
@@ -170,10 +170,3 @@ C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/dl_vref.h:
 C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/dl_wwdt.h:
 C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_interrupt.h:
 C:/TI/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_systick.h:
-../Drivers/motor_control.h:
-../Drivers/trajectory.h:
-../Drivers/grayscale.h:
-../Drivers/steering.h:
-../Drivers/line_pid.h:
-../Drivers/gyro_pid.h:
-../Drivers/uart.h:

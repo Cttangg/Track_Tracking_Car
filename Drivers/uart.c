@@ -34,11 +34,6 @@ static inline uint16_t ring_count(const UART_Ring *r)
     return (uint16_t)((r->head - r->tail) & r->mask);
 }
 
-static inline uint16_t ring_free(const UART_Ring *r)
-{
-    return (uint16_t)(r->mask - ring_count(r));   /* 可用 = size-1 - count */
-}
-
 /* 生产者调用: 成功 1, 满 0 */
 static inline int ring_push(UART_Ring *r, uint8_t b)
 {
