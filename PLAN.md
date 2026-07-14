@@ -171,15 +171,14 @@ mode 1            → 强制切模式 B (陀螺仪)
 
 | 文档 | 内容 |
 |------|------|
-| `change.md` | 串口统一 + 灰度接入变动记录 |
-| `grayscale_debug.md` | 灰度传感器引脚调试全程 |
-| `firewater_debug.md` | 串口/Firewater 调试全程（已解决） |
-| `Docs/motor_params.md` | 电机参数-函数-行为对照 + 差速公式 |
-| `Docs/cmd_extend_plan.md` | 串口命令扩展详细分析 |
-| `Docs/uart_debug.md` | UART 初始化失败 / 乱码 调试说明书 |
-| `Docs/line_pid_plan.md` | 闭环循迹 PID 初期方案（被本 PLAN 取代） |
+| `readme.md` | 项目总索引 (快速开始 + 目录 + 文档导航) |
+| `PLAN.md` | 本文件 (开发计划) |
+| `Docs/cmd_reference.md` | 串口命令参考手册 (27 条) |
+| `Docs/motor_params.md` | 电机参数-函数-行为对照 + 差速公式 + 校准流程 |
+| `Docs/uart_debug.md` | UART 初始化失败 / PA11 噪声 调试说明书 |
 | `Drivers/README_UART.md` | 通用串口库使用说明 |
 | `Drivers/README_UART_DESIGN.md` | 通用串口库设计决策 |
-| `Drivers/README_GRAYSCALE.md` | 灰度传感器模块说明 |
+| `Drivers/README_MOTOR_DRIVE.md` | 电机 PID 控制模块说明 |
 | `Drivers/README_OPENROUND_CONTROL.md` | 轨迹控制模块使用说明 |
-| `Drivers/README.md` | 电机 PID 控制模块说明 |
+| `Drivers/README_GRAYSCALE.md` | 灰度传感器模块说明 |
+| `Drivers/README_STEERING.md` | 闭环转向模块 (line_pid/gyro_pid/steering) 说明 |

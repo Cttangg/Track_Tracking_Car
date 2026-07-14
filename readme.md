@@ -1,89 +1,72 @@
-# 循迹小车 — 本次改动说明
+# 循迹小车 (Track Tracking Car)
 
-> 详细函数用法见 [`Drivers/README_OPENROUND_CONTROL.md`](Drivers/README_OPENROUND_CONTROL.md)
-> 电机/PID 驱动见 [`Drivers/README.md`](Drivers/README.md)
+> MSPM0G3507 双电机差速循迹小车 — 后驱，8 路灰度传感器，双模式闭环控制。
+> 完整开发计划见 [`PLAN.md`](PLAN.md)
 
-## 本次改动概览
+## 快速开始
 
-新增**开环轨迹控制模块** (`Drivers/trajectory.c` / `trajectory.h`)，并为后期循迹闭环预留接口。控制方式：**电机实时控制在 10ms 中断 (TIMG12 ISR)**，串口命令在主循环轮询。
+### 编译 & 烧录
+用 CCS Theia 打开项目 → 构建 → 烧录。`Drivers/` 为托管构建源文件夹，CCS 自动重新生成 makefile。
 
-| 文件 | 变动 |
-|------|------|
-| `Drivers/trajectory.h` | 新增 (分段路径 API + 闭环预留接口 + 数据类型) |
-| `Drivers/trajectory.c` | 新增 (运动学解算 + 段状态机 + 前馈下发) |
-| `Drivers/README_OPENROUND_CONTROL.md` | 新增 (模块函数用法文档) |
-| `empty.c` | ISR 内加 `trajectory_update()`; main 内运行 8 字闭合路径 |
+### 串口连接
+波特率 115200，UART0 (PA10 TX / PA11 RX)。上电 1 秒静默后输出 banner。命令以 `\n` 或 `\r` 结尾。
 
-## 改动一：分段路径状态机 (适配闭合曲线)
+### 命令速查
+发 `?` 可随时查看帮助。完整命令手册 → [`Docs/cmd_reference.md`](Docs/cmd_reference.md)
 
-原来的"单段 + 时间倒计时"改为**分段路径**：轨迹 = 若干"段"(直线 / 圆弧)首尾相接的闭合曲线 (如 8 字形)。
+| 类别 | 常用命令 | 示例 |
+|------|---------|------|
+| 状态 | `?` `gs` | `gs` → 打印灰度 8bit |
+| 电机 | `Tr1 <rpm>` `stop1` `stop` | `Tr -300` → 双电机前进 |
+| 轨迹 | `st <dist> <v>` `arc/cir` | `st 0.5 0.1` → 直行 0.5m |
+| 循线 PID | `Lp <v>` `mode 0/1` | `Lp 0.4` → 设循线 Kp |
 
-- 新增段类型与段定义：
-  ```c
-  typedef enum { SEG_STRAIGHT, SEG_ARC } seg_type_t;
-  typedef struct {
-      seg_type_t type;
-      float R;          // 圆弧半径 (m); 直线忽略
-      float length;     // 圆弧: theta(rad) / 直线: distance(m)
-      float v;          // 段线速度 (m/s)
-      int   direction;  // 圆弧: +1逆时针 / -1顺时针; 直线忽略
-  } traj_segment_t;
-  ```
-- 状态结构体改为持有段数组：`segs / num_segs / seg_index / loop`。
-- 段结束自动切下一段；`loop = 1` 时走完最后一段回到第 0 段 → **闭合曲线循环** (循迹用)。
-- 新增 `trajectory_run_path(segs, num, loop)`；`arc / circle / straight` 变为内部单段路径的便捷封装 (行为不变)。
+### 默认行为
+上电后自动启动闭环转向控制（灰度循线模式 A），给你一条轨迹命令（如 `st 0.5 0.1`）即可看到循线效果。
 
-## 改动二：闭环控制预留接口
+## 目录结构
 
-当前为开环前馈 (运动学外环开环 + 轮速内环 PID 闭环)。为后期加入循迹传感器闭环预留：
-
-- 状态结构体新增 `closed_loop` 标志 + `traj_feedback_fn feedback` 回调。
-- `trajectory_update()` 改为**每 tick 下发**轮速，闭环修正直接叠加：
-  ```
-  v_L_cmd = ff_v_L - corr,   v_R_cmd = ff_v_R + corr     (corr = feedback())
-  ```
-  开环时 `corr` 恒为 0，行为与纯前馈一致；循迹 PID 后期无需改控制主干即可挂入。
-- 新增接口：
-  ```c
-  typedef float (*traj_feedback_fn)(void);        // 返回转向修正 (m/s)
-  void trajectory_set_feedback(traj_feedback_fn fn);
-  void trajectory_enable_closed_loop(uint8_t enable);
-  ```
-
-## 控制方式：中断 vs 轮询
-
-- **电机控制 (实时) → 中断**：`TIMER_0_INST_IRQHandler` (TIMG12，10ms) 内依次调用
-  `motor_control_update()` (测速→PID→驱动) 和 `trajectory_update()` (轨迹状态机)。
-- **串口命令 (非实时) → 轮询**：主循环 `cmd_poll()` 轮询 `DL_UART_isRXFIFOEmpty` + firewater 输出。
-
-```c
-void TIMER_0_INST_IRQHandler(void) {
-    motor_control_update();   // 内环: 编码器测速 + 轮速 PID
-    trajectory_update();      // 外环: 分段路径前馈 (+ 预留闭环修正)
-    DL_TimerG_clearInterruptStatus(TIMER_0_INST, DL_TIMERG_INTERRUPT_ZERO_EVENT);
-}
+```
+Track_Tracking_Car/
+├── empty.c                 主程序 (main + cmd_do + TIMG12 ISR)
+├── empty.syscfg             SysConfig 外设配置
+├── Drivers/
+│   ├── motor.c/h           底层电机驱动 (AIN1/AIN2 + PWM)
+│   ├── motor_control.h     上层控制 API (PID 闭环 + 手动开环)
+│   ├── trajectory.c/h      分段路径轨迹 + 差速运动学前馈 + 闭环反馈钩子
+│   ├── grayscale.c/h       8 路灰度传感器 (GPIO 读取 + 串口输出)
+│   ├── line_pid.c/h        模式 A: 灰度循线 PID (重心法)
+│   ├── gyro_pid.c/h        模式 B: 陀螺仪直行 PID (UART1 预留)
+│   ├── steering.c/h        模式调度器 (自动切换 A/B + 统一回调)
+│   └── uart.c/h            通用串口库 (阻塞 TX + 中断 RX)
+└── Docs/
+    ├── cmd_reference.md     串口命令参考手册 (27 条)
+    ├── motor_params.md      电机参数-函数-行为对照 + 差速公式
+    └── uart_debug.md        UART 初始化失败 / PA11 噪声调试说明
 ```
 
-## 8 字闭合曲线示例 (empty.c)
+## 文档导航
 
-```c
-static const traj_segment_t g_figure8[] = {
-    // type,        R,     length,      v,     dir
-    { SEG_STRAIGHT, 0.0f,  0.30f,       0.1f,  +1 },   // 交叉直线
-    { SEG_ARC,      0.30f, 4.712389f,   0.1f,  +1 },   // 左环 CCW 270°
-    { SEG_STRAIGHT, 0.0f,  0.30f,       0.1f,  +1 },   // 交叉直线
-    { SEG_ARC,      0.30f, 4.712389f,   0.1f,  -1 },   // 右环 CW  270°
-};
-trajectory_run_path(g_figure8, 4, 1);   // loop=1 循环循迹
-```
+| 想看什么 | 文档 |
+|----------|------|
+| 命令怎么用 | [`Docs/cmd_reference.md`](Docs/cmd_reference.md) |
+| 电机参数 (方向/轮距/轮径) | [`Docs/motor_params.md`](Docs/motor_params.md) |
+| 串口出问题怎么修 | [`Docs/uart_debug.md`](Docs/uart_debug.md) |
+| 电机 PID 驱动怎么用 | [`Drivers/README_MOTOR_DRIVE.md`](Drivers/README_MOTOR_DRIVE.md) |
+| 轨迹控制怎么用 | [`Drivers/README_OPENROUND_CONTROL.md`](Drivers/README_OPENROUND_CONTROL.md) |
+| 通用串口库怎么用 | [`Drivers/README_UART.md`](Drivers/README_UART.md) |
+| 灰度传感器怎么配 | [`Drivers/README_GRAYSCALE.md`](Drivers/README_GRAYSCALE.md) |
+| 闭环转向 (循线+陀螺仪) | [`Drivers/README_STEERING.md`](Drivers/README_STEERING.md) |
+| 串口库怎么设计的 | [`Drivers/README_UART_DESIGN.md`](Drivers/README_UART_DESIGN.md) |
+| 开发计划和已完成模块 | [`PLAN.md`](PLAN.md) |
 
-## 上电注意事项
+## 硬件配置
 
-1. **8 字尺寸为示例值**：`R=0.3`、直线 `0.3`、270° 需按实际赛道几何标定使 8 字真正闭合。
-2. **标定常量** (`trajectory.c` 顶部)：`WHEEL_BASE=0.16`、`WHEEL_RADIUS=0.033`、`GEAR_RATIO=20` 必须按实车修改。
-3. **方向/接线**：若转向与预期相反，翻转 `direction` 或 `MOTOR_L_SIGN / MOTOR_R_SIGN`。
-4. **RPM 为电机轴转速** (减速前)：`set_speed` 使用值 = 轮输出轴转速 × 减速比。
-
-## 构建
-
-`Drivers` 为普通托管构建源文件夹，CCS 每次构建自动重新生成 `Debug/*.mk` 并编译 `trajectory.c`，无需手动改 makefile。
+| 参数 | 值 | 定义位置 |
+|------|-----|---------|
+| 电机映射 | L=电机2, R=电机1 (后驱) | `trajectory.c` |
+| 轮距 | 16 cm | `trajectory.c` WHEEL_BASE |
+| 轮径 | 3.3 cm (直径 6.6) | `trajectory.c` WHEEL_RADIUS |
+| 减速比 | 1:20 | `trajectory.c` GEAR_RATIO |
+| 控制周期 | 10 ms | TIMG12 ISR |
+| 传感器映射 | bit0=最左, bit7=最右 | `line_pid.c` |
