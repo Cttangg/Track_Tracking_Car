@@ -84,10 +84,8 @@ static void port_setup(UART_Port *p, UART_Regs *inst, IRQn_Type irqn,
     ring_init(&p->rx, rxbuf, rxsize);
     ring_init(&p->tx, txbuf, txsize);
 
-    /* 只开 RX 中断; TX 为阻塞直发, 不用中断 */
-    DL_UART_Main_enableInterrupt(inst, DL_UART_MAIN_INTERRUPT_RX);
-    NVIC_ClearPendingIRQ(irqn);
-    NVIC_EnableIRQ(irqn);
+    /* TX 为阻塞直发, 无需中断; RX 中断延后由 UART_RxEnable() 手动开,
+     * 避免 PA11 浮空噪声在上电瞬间灌爆环形缓冲。 */
 }
 
 void UART_Init(void)
@@ -98,6 +96,29 @@ void UART_Init(void)
     port_setup(&g_uart1, UART_1_INST, UART_1_INST_INT_IRQN,
                g_uart1_rx, UART1_RX_SIZE, g_uart1_tx, UART1_TX_SIZE);
 #endif
+}
+
+/* 使能 RX 中断 (在硬件稳定后调用, 避免上电噪声灌入) */
+void UART_RxEnable(void)
+{
+    /* 先清空硬件 RX FIFO 和软件环形缓冲中的上电残留 */
+    while (!DL_UART_isRXFIFOEmpty(UART_0_INST))
+        DL_UART_Main_receiveData(UART_0_INST);
+    UART_RxFlush(&g_uart0);
+
+    DL_UART_Main_enableInterrupt(UART_0_INST, DL_UART_MAIN_INTERRUPT_RX);
+    NVIC_ClearPendingIRQ(UART_0_INST_INT_IRQN);
+    NVIC_EnableIRQ(UART_0_INST_INT_IRQN);
+}
+
+/* 关闭 RX 中断 (回退到纯 TX 模式) */
+void UART_RxDisable(void)
+{
+    NVIC_DisableIRQ(UART_0_INST_INT_IRQN);
+    DL_UART_Main_disableInterrupt(UART_0_INST, DL_UART_MAIN_INTERRUPT_RX);
+    UART_RxFlush(&g_uart0);
+    while (!DL_UART_isRXFIFOEmpty(UART_0_INST))
+        DL_UART_Main_receiveData(UART_0_INST);
 }
 
 /* ==================== 发送 (阻塞直发) ====================

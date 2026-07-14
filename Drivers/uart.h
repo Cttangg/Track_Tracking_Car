@@ -69,8 +69,12 @@ extern UART_Port g_uart0;              /* UART0: PA10(TX)/PA11(RX) */
 extern UART_Port g_uart1;
 #endif
 
-/* ===== 初始化 (初始化所有已启用端口, 开 RX 中断) ===== */
+/* ===== 初始化 (初始化所有已启用端口, 只开 TX, RX 中断延后开) ===== */
 void UART_Init(void);
+
+/* 使能/关闭 RX 中断 (PA11 稳定后调用, 先清空硬件 FIFO 和环形缓冲) */
+void UART_RxEnable(void);
+void UART_RxDisable(void);
 
 /* ===== 发送 (非阻塞入队 + TX 中断; 满则入队部分并返回实际数) ===== */
 uint16_t UART_Write(UART_Port *port, const uint8_t *data, uint16_t len);
