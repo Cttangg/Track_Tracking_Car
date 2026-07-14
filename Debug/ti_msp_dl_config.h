@@ -140,6 +140,22 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 
 
 
+
+/* Defines for I2C_GYRO */
+#define I2C_GYRO_INST                                                       I2C0
+#define I2C_GYRO_INST_IRQHandler                                 I2C0_IRQHandler
+#define I2C_GYRO_INST_INT_IRQN                                     I2C0_INT_IRQn
+#define I2C_GYRO_BUS_SPEED_HZ                                             400000
+#define GPIO_I2C_GYRO_SDA_PORT                                             GPIOA
+#define GPIO_I2C_GYRO_SDA_PIN                                      DL_GPIO_PIN_0
+#define GPIO_I2C_GYRO_IOMUX_SDA                                   (IOMUX_PINCM1)
+#define GPIO_I2C_GYRO_IOMUX_SDA_FUNC                    IOMUX_PINCM1_PF_I2C0_SDA
+#define GPIO_I2C_GYRO_SCL_PORT                                             GPIOA
+#define GPIO_I2C_GYRO_SCL_PIN                                      DL_GPIO_PIN_1
+#define GPIO_I2C_GYRO_IOMUX_SCL                                   (IOMUX_PINCM2)
+#define GPIO_I2C_GYRO_IOMUX_SCL_FUNC                    IOMUX_PINCM2_PF_I2C0_SCL
+
+
 /* Defines for UART_0 */
 #define UART_0_INST                                                        UART0
 #define UART_0_INST_FREQUENCY                                           40000000
@@ -156,6 +172,22 @@ bool SYSCFG_DL_SYSCTL_SYSPLL_init(void);
 #define UART_0_BAUD_RATE                                                (115200)
 #define UART_0_IBRD_40_MHZ_115200_BAUD                                      (21)
 #define UART_0_FBRD_40_MHZ_115200_BAUD                                      (45)
+/* Defines for UART_GYRO */
+#define UART_GYRO_INST                                                     UART1
+#define UART_GYRO_INST_FREQUENCY                                        40000000
+#define UART_GYRO_INST_IRQHandler                               UART1_IRQHandler
+#define UART_GYRO_INST_INT_IRQN                                   UART1_INT_IRQn
+#define GPIO_UART_GYRO_RX_PORT                                             GPIOB
+#define GPIO_UART_GYRO_TX_PORT                                             GPIOB
+#define GPIO_UART_GYRO_RX_PIN                                      DL_GPIO_PIN_7
+#define GPIO_UART_GYRO_TX_PIN                                      DL_GPIO_PIN_6
+#define GPIO_UART_GYRO_IOMUX_RX                                  (IOMUX_PINCM24)
+#define GPIO_UART_GYRO_IOMUX_TX                                  (IOMUX_PINCM23)
+#define GPIO_UART_GYRO_IOMUX_RX_FUNC                   IOMUX_PINCM24_PF_UART1_RX
+#define GPIO_UART_GYRO_IOMUX_TX_FUNC                   IOMUX_PINCM23_PF_UART1_TX
+#define UART_GYRO_BAUD_RATE                                             (115200)
+#define UART_GYRO_IBRD_40_MHZ_115200_BAUD                                   (21)
+#define UART_GYRO_FBRD_40_MHZ_115200_BAUD                                   (45)
 
 
 
@@ -233,7 +265,9 @@ void SYSCFG_DL_PWMA_init(void);
 void SYSCFG_DL_COMPARE_0_init(void);
 void SYSCFG_DL_COMPARE_2_init(void);
 void SYSCFG_DL_TIMER_0_init(void);
+void SYSCFG_DL_I2C_GYRO_init(void);
 void SYSCFG_DL_UART_0_init(void);
+void SYSCFG_DL_UART_GYRO_init(void);
 
 
 bool SYSCFG_DL_saveConfiguration(void);

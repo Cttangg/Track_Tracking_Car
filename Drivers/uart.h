@@ -11,12 +11,20 @@
  * 详见 Drivers/README_UART_DESIGN.md
  * ============================================================ */
 
+/* ------------------------------------------------------------------
+ * 兼容性別名：將原始碼使用的通用名稱映射到 SysConfig 生成的實例名稱
+ * (UART_0_INST 已由 ti_msp_dl_config.h 正確定義 → UART0)
+ * ------------------------------------------------------------------ */
+#define UART_1_INST               UART_GYRO_INST
+#define UART_1_INST_INT_IRQN      UART_GYRO_INST_INT_IRQN
+#define UART_1_INST_IRQHandler    UART_GYRO_INST_IRQHandler
+
 /* ===== 缓冲区配置 (字节, 必须为 2 的幂) ===== */
 #define UART0_RX_SIZE   256
 #define UART0_TX_SIZE   256
 
 /* 预留: 取消注释启用 UART1 (需 SysConfig 先添加 UART_1_INST) */
-/* #define UART1_ENABLE */
+#define UART1_ENABLE
 #define UART1_RX_SIZE   256
 #define UART1_TX_SIZE   256
 

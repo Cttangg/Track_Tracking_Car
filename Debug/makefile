@@ -4,7 +4,7 @@
 
 SHELL = cmd.exe
 
-CG_TOOL_ROOT := D:/ti/ccs2050/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS
+CG_TOOL_ROOT := F:/ti/ccs2050/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS
 
 GEN_OPTS__FLAG := @"./device.opt" 
 GEN_CMDS__FLAG := -Wl,-l"./device_linker.cmd" 
@@ -17,6 +17,7 @@ ORDERED_OBJS += \
 "./Drivers/gyro_pid.o" \
 "./Drivers/line_pid.o" \
 "./Drivers/motor.o" \
+"./Drivers/mpu6500.o" \
 "./Drivers/steering.o" \
 "./Drivers/trajectory.o" \
 "./Drivers/uart.o" \
@@ -138,15 +139,15 @@ all: $(OBJS) $(GEN_CMDS)
 # Tool invocations
 Track_Tracking_Car.out: $(OBJS) $(GEN_CMDS)
 	@echo 'Arm Linker - building target: "$@"'
-	"D:/ti/ccs2050/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS/bin/tiarmclang.exe" @"device.opt"  -march=thumbv6m -mcpu=cortex-m0plus -mfloat-abi=soft -mlittle-endian -mthumb -O2 -gdwarf-3 -Wall -Wl,-m"Track_Tracking_Car.map" -Wl,-i"C:/TI/mspm0_sdk_2_10_00_04/source" -Wl,-i"C:/Users/39347/workspace_ccstheia/Track_Tracking_Car" -Wl,-i"C:/Users/39347/workspace_ccstheia/Track_Tracking_Car/Debug/syscfg" -Wl,-i"D:/ti/ccs2050/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS/lib" -Wl,--diag_wrap=off -Wl,--display_error_number -Wl,--warn_sections -Wl,--xml_link_info="Track_Tracking_Car_linkInfo.xml" -Wl,--rom_model -o "Track_Tracking_Car.out" $(ORDERED_OBJS)
+	"F:/ti/ccs2050/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS/bin/tiarmclang.exe" @"device.opt"  -march=thumbv6m -mcpu=cortex-m0plus -mfloat-abi=soft -mlittle-endian -mthumb -O2 -gdwarf-3 -Wall -Wl,-m"Track_Tracking_Car.map" -Wl,-i"F:/ti/mspm0_sdk_2_10_00_04/source" -Wl,-i"C:/Users/zhufq/Desktop/Motor_Queen" -Wl,-i"C:/Users/zhufq/Desktop/Motor_Queen/Debug/syscfg" -Wl,-i"F:/ti/ccs2050/ccs/tools/compiler/ti-cgt-armllvm_4.0.4.LTS/lib" -Wl,--diag_wrap=off -Wl,--display_error_number -Wl,--warn_sections -Wl,--xml_link_info="Track_Tracking_Car_linkInfo.xml" -Wl,--rom_model -o "Track_Tracking_Car.out" $(ORDERED_OBJS)
 	@echo 'Finished building target: "$@"'
 	@echo ' '
 
 # Other Targets
 clean:
 	-$(RM) $(GEN_MISC_FILES__QUOTED)$(GEN_FILES__QUOTED)$(EXE_OUTPUTS__QUOTED)
-	-$(RM) "empty.o" "ti_msp_dl_config.o" "startup_mspm0g350x_ticlang.o" "Drivers\grayscale.o" "Drivers\gyro_pid.o" "Drivers\line_pid.o" "Drivers\motor.o" "Drivers\steering.o" "Drivers\trajectory.o" "Drivers\uart.o" 
-	-$(RM) "empty.d" "ti_msp_dl_config.d" "startup_mspm0g350x_ticlang.d" "Drivers\grayscale.d" "Drivers\gyro_pid.d" "Drivers\line_pid.d" "Drivers\motor.d" "Drivers\steering.d" "Drivers\trajectory.d" "Drivers\uart.d" 
+	-$(RM) "empty.o" "ti_msp_dl_config.o" "startup_mspm0g350x_ticlang.o" "Drivers\grayscale.o" "Drivers\gyro_pid.o" "Drivers\line_pid.o" "Drivers\motor.o" "Drivers\mpu6500.o" "Drivers\steering.o" "Drivers\trajectory.o" "Drivers\uart.o" 
+	-$(RM) "empty.d" "ti_msp_dl_config.d" "startup_mspm0g350x_ticlang.d" "Drivers\grayscale.d" "Drivers\gyro_pid.d" "Drivers\line_pid.d" "Drivers\motor.d" "Drivers\mpu6500.d" "Drivers\steering.d" "Drivers\trajectory.d" "Drivers\uart.d" 
 	-@echo ' '
 
 .PHONY: all clean dependents

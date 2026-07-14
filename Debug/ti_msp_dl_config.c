@@ -57,7 +57,9 @@ SYSCONFIG_WEAK void SYSCFG_DL_init(void)
     SYSCFG_DL_COMPARE_0_init();
     SYSCFG_DL_COMPARE_2_init();
     SYSCFG_DL_TIMER_0_init();
+    SYSCFG_DL_I2C_GYRO_init();
     SYSCFG_DL_UART_0_init();
+    SYSCFG_DL_UART_GYRO_init();
     /* Ensure backup structures have no valid state */
 
 	gCOMPARE_0Backup.backupRdy 	= false;
@@ -99,7 +101,9 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_TimerA_reset(COMPARE_0_INST);
     DL_TimerA_reset(COMPARE_2_INST);
     DL_TimerG_reset(TIMER_0_INST);
+    DL_I2C_reset(I2C_GYRO_INST);
     DL_UART_Main_reset(UART_0_INST);
+    DL_UART_Main_reset(UART_GYRO_INST);
 
     DL_GPIO_enablePower(GPIOA);
     DL_GPIO_enablePower(GPIOB);
@@ -107,7 +111,9 @@ SYSCONFIG_WEAK void SYSCFG_DL_initPower(void)
     DL_TimerA_enablePower(COMPARE_0_INST);
     DL_TimerA_enablePower(COMPARE_2_INST);
     DL_TimerG_enablePower(TIMER_0_INST);
+    DL_I2C_enablePower(I2C_GYRO_INST);
     DL_UART_Main_enablePower(UART_0_INST);
+    DL_UART_Main_enablePower(UART_GYRO_INST);
     delay_cycles(POWER_STARTUP_DELAY);
 }
 
@@ -125,10 +131,25 @@ SYSCONFIG_WEAK void SYSCFG_DL_GPIO_init(void)
     DL_GPIO_initPeripheralInputFunction(GPIO_COMPARE_0_C0_IOMUX,GPIO_COMPARE_0_C0_IOMUX_FUNC);
     DL_GPIO_initPeripheralInputFunction(GPIO_COMPARE_2_C0_IOMUX,GPIO_COMPARE_2_C0_IOMUX_FUNC);
 
+    DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_GYRO_IOMUX_SDA,
+        GPIO_I2C_GYRO_IOMUX_SDA_FUNC, DL_GPIO_INVERSION_DISABLE,
+        DL_GPIO_RESISTOR_NONE, DL_GPIO_HYSTERESIS_DISABLE,
+        DL_GPIO_WAKEUP_DISABLE);
+    DL_GPIO_initPeripheralInputFunctionFeatures(GPIO_I2C_GYRO_IOMUX_SCL,
+        GPIO_I2C_GYRO_IOMUX_SCL_FUNC, DL_GPIO_INVERSION_DISABLE,
+        DL_GPIO_RESISTOR_NONE, DL_GPIO_HYSTERESIS_DISABLE,
+        DL_GPIO_WAKEUP_DISABLE);
+    DL_GPIO_enableHiZ(GPIO_I2C_GYRO_IOMUX_SDA);
+    DL_GPIO_enableHiZ(GPIO_I2C_GYRO_IOMUX_SCL);
+
     DL_GPIO_initPeripheralOutputFunction(
         GPIO_UART_0_IOMUX_TX, GPIO_UART_0_IOMUX_TX_FUNC);
     DL_GPIO_initPeripheralInputFunction(
         GPIO_UART_0_IOMUX_RX, GPIO_UART_0_IOMUX_RX_FUNC);
+    DL_GPIO_initPeripheralOutputFunction(
+        GPIO_UART_GYRO_IOMUX_TX, GPIO_UART_GYRO_IOMUX_TX_FUNC);
+    DL_GPIO_initPeripheralInputFunction(
+        GPIO_UART_GYRO_IOMUX_RX, GPIO_UART_GYRO_IOMUX_RX_FUNC);
 
     DL_GPIO_initDigitalOutput(ShowStatus_LED_IOMUX);
 
@@ -464,6 +485,45 @@ SYSCONFIG_WEAK void SYSCFG_DL_TIMER_0_init(void) {
 }
 
 
+static const DL_I2C_ClockConfig gI2C_GYROClockConfig = {
+    .clockSel = DL_I2C_CLOCK_BUSCLK,
+    .divideRatio = DL_I2C_CLOCK_DIVIDE_1,
+};
+
+SYSCONFIG_WEAK void SYSCFG_DL_I2C_GYRO_init(void) {
+
+    DL_I2C_setClockConfig(I2C_GYRO_INST,
+        (DL_I2C_ClockConfig *) &gI2C_GYROClockConfig);
+    DL_I2C_setAnalogGlitchFilterPulseWidth(I2C_GYRO_INST,
+        DL_I2C_ANALOG_GLITCH_FILTER_WIDTH_50NS);
+    DL_I2C_enableAnalogGlitchFilter(I2C_GYRO_INST);
+    DL_I2C_setDigitalGlitchFilterPulseWidth(I2C_GYRO_INST,
+        DL_I2C_DIGITAL_GLITCH_FILTER_WIDTH_CLOCKS_1);
+
+    /* Configure Controller Mode */
+    DL_I2C_resetControllerTransfer(I2C_GYRO_INST);
+    /* Set frequency to 400000 Hz*/
+    DL_I2C_setTimerPeriod(I2C_GYRO_INST, 9);
+    DL_I2C_setControllerTXFIFOThreshold(I2C_GYRO_INST, DL_I2C_TX_FIFO_LEVEL_BYTES_7);
+    DL_I2C_setControllerRXFIFOThreshold(I2C_GYRO_INST, DL_I2C_RX_FIFO_LEVEL_BYTES_8);
+    DL_I2C_enableControllerClockStretching(I2C_GYRO_INST);
+
+    /* Configure Interrupts */
+    DL_I2C_enableInterrupt(I2C_GYRO_INST,
+                           DL_I2C_INTERRUPT_CONTROLLER_NACK |
+                           DL_I2C_INTERRUPT_CONTROLLER_RXFIFO_TRIGGER |
+                           DL_I2C_INTERRUPT_CONTROLLER_RX_DONE |
+                           DL_I2C_INTERRUPT_CONTROLLER_STOP |
+                           DL_I2C_INTERRUPT_CONTROLLER_TXFIFO_TRIGGER |
+                           DL_I2C_INTERRUPT_CONTROLLER_TX_DONE);
+
+
+    /* Enable module */
+    DL_I2C_enableController(I2C_GYRO_INST);
+
+
+}
+
 static const DL_UART_Main_ClockConfig gUART_0ClockConfig = {
     .clockSel    = DL_UART_MAIN_CLOCK_BUSCLK,
     .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
@@ -494,5 +554,36 @@ SYSCONFIG_WEAK void SYSCFG_DL_UART_0_init(void)
 
 
     DL_UART_Main_enable(UART_0_INST);
+}
+static const DL_UART_Main_ClockConfig gUART_GYROClockConfig = {
+    .clockSel    = DL_UART_MAIN_CLOCK_BUSCLK,
+    .divideRatio = DL_UART_MAIN_CLOCK_DIVIDE_RATIO_1
+};
+
+static const DL_UART_Main_Config gUART_GYROConfig = {
+    .mode        = DL_UART_MAIN_MODE_NORMAL,
+    .direction   = DL_UART_MAIN_DIRECTION_TX_RX,
+    .flowControl = DL_UART_MAIN_FLOW_CONTROL_NONE,
+    .parity      = DL_UART_MAIN_PARITY_NONE,
+    .wordLength  = DL_UART_MAIN_WORD_LENGTH_8_BITS,
+    .stopBits    = DL_UART_MAIN_STOP_BITS_ONE
+};
+
+SYSCONFIG_WEAK void SYSCFG_DL_UART_GYRO_init(void)
+{
+    DL_UART_Main_setClockConfig(UART_GYRO_INST, (DL_UART_Main_ClockConfig *) &gUART_GYROClockConfig);
+
+    DL_UART_Main_init(UART_GYRO_INST, (DL_UART_Main_Config *) &gUART_GYROConfig);
+    /*
+     * Configure baud rate by setting oversampling and baud rate divisors.
+     *  Target baud rate: 115200
+     *  Actual baud rate: 115190.78
+     */
+    DL_UART_Main_setOversampling(UART_GYRO_INST, DL_UART_OVERSAMPLING_RATE_16X);
+    DL_UART_Main_setBaudRateDivisor(UART_GYRO_INST, UART_GYRO_IBRD_40_MHZ_115200_BAUD, UART_GYRO_FBRD_40_MHZ_115200_BAUD);
+
+
+
+    DL_UART_Main_enable(UART_GYRO_INST);
 }
 

@@ -1,6 +1,6 @@
 # FIXED
 
-empty.o: ../empty.c \
+Drivers/mpu6500.o: ../Drivers/mpu6500.c ../Drivers/mpu6500.h \
  ti_msp_dl_config.h \
  F:/ti/mspm0_sdk_2_10_00_04/source/ti/devices/msp/msp.h \
  F:/ti/mspm0_sdk_2_10_00_04/source/ti/devices/DeviceFamily.h \
@@ -84,10 +84,8 @@ empty.o: ../empty.c \
  F:/ti/mspm0_sdk_2_10_00_04/source/ti/driverlib/dl_wwdt.h \
  F:/ti/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_interrupt.h \
  F:/ti/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_systick.h \
- ../Drivers/motor_control.h ../Drivers/trajectory.h \
- ../Drivers/grayscale.h ../Drivers/steering.h \
- ../Drivers/line_pid.h ../Drivers/gyro_pid.h ../Drivers/uart.h \
- ../Drivers/mpu6500.h
+ ../Drivers/uart.h
+../Drivers/mpu6500.h:
 ti_msp_dl_config.h:
 F:/ti/mspm0_sdk_2_10_00_04/source/ti/devices/msp/msp.h:
 F:/ti/mspm0_sdk_2_10_00_04/source/ti/devices/DeviceFamily.h:
@@ -171,11 +169,4 @@ F:/ti/mspm0_sdk_2_10_00_04/source/ti/driverlib/dl_vref.h:
 F:/ti/mspm0_sdk_2_10_00_04/source/ti/driverlib/dl_wwdt.h:
 F:/ti/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_interrupt.h:
 F:/ti/mspm0_sdk_2_10_00_04/source/ti/driverlib/m0p/dl_systick.h:
-../Drivers/motor_control.h:
-../Drivers/trajectory.h:
-../Drivers/grayscale.h:
-../Drivers/steering.h:
-../Drivers/line_pid.h:
-../Drivers/gyro_pid.h:
 ../Drivers/uart.h:
-../Drivers/mpu6500.h:

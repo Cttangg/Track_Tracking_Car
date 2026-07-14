@@ -5,6 +5,7 @@
 "./Drivers/gyro_pid.o"
 "./Drivers/line_pid.o"
 "./Drivers/motor.o"
+"./Drivers/mpu6500.o"
 "./Drivers/steering.o"
 "./Drivers/trajectory.o"
 "./Drivers/uart.o"

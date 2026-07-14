@@ -46,6 +46,7 @@
 #include "./Drivers/line_pid.h"
 #include "./Drivers/gyro_pid.h"
 #include "./Drivers/uart.h"
+#include "./Drivers/mpu6500.h"
 #include "stdio.h"
 #include <string.h>
 
@@ -57,7 +58,7 @@
 
 /* firewater: 9 channels — T1,R1,D1,F1,T2,R2,D2,F2,S (S=灰度传感器8bit二进制)
  * 用已验证可用的 sprintf + UART_Puts 路径; 电机状态先发, 灰度位后发。 */
-static void firewater_send(void) {
+static __attribute__((noinline)) void firewater_send(void) {
     static char b[96];
 
     /* 1) 电机状态 (8 字段 + 逗号), 优先发出 */
@@ -85,7 +86,7 @@ static void firewater_send(void) {
 
 /* ==================== 命令解析 ==================== */
 
-static void cmd_show(void) {
+static __attribute__((noinline)) void cmd_show(void) {
     UART_Printf(&g_uart0, "M1: Tr=%d RPM=%d D=%d F=%d\r\n",
         (int)motor_control_get_target_rpm(1),
         (int)motor_control_get_actual_rpm(1),
@@ -108,7 +109,7 @@ static void cmd_show(void) {
 }
 
 /* 命令解析: 先取第一个 token 作为命令名, 按命令匹配参数 */
-static void cmd_do(const char *line) {
+static __attribute__((noinline)) void cmd_do(const char *line) {
     char k[16] = {0};
     float v1 = 0, v2 = 0, v3 = 0;
     int dir = 1;
@@ -237,7 +238,7 @@ static void cmd_do(const char *line) {
 
 /* 从通用库 RX 环形缓冲取字节, 本文件组装成行后交给 cmd_do。
  * 每轮限量处理, 防止 RX 持续来数据 (如 PA11 噪声) 时独占主循环, 保证 firewater 能被调用。 */
-static void cmd_poll(void) {
+static __attribute__((noinline)) void cmd_poll(void) {
     static char b[CMD_BUF_SIZE]; static int i=0;
     uint8_t c;
     int budget = 2 * CMD_BUF_SIZE;
@@ -263,46 +264,71 @@ void TIMER_0_INST_IRQHandler(void)
     DL_TimerG_clearInterruptStatus(TIMER_0_INST, DL_TIMERG_INTERRUPT_ZERO_EVENT);
 }
 
-/* ==================== Main ==================== */
+/* ==================== 陀螺仪轮询 (独立函数, 避免 main 过大触发编译器 bug) ==================== */
 
-int main(void)
-{
-    SYSCFG_DL_init();
-    UART_Init();          /* 通用串口库: 初始化 g_uart0 (仅 TX, 不开 RX 中断) */
-    delay_cycles(CPUCLK_FREQ * 1);   /* 静默 1 秒, 等硬件就绪 */
-    UART_RxEnable();                  /* PA11 稳定后再开 RX 中断, 先清空残留噪声 */
+static __attribute__((noinline)) void gyro_poll(void) {
+    MPU6500_GyroData gyroData;
+    if (MPU6500_ReadGyro(&gyroData)) {
+        UART_Printf(&g_uart1, "GX: %.2f | GY: %.2f | GZ: %.2f\r\n",
+                    gyroData.gyro_x, gyroData.gyro_y, gyroData.gyro_z);
+    } else {
+        UART_Puts(&g_uart1, "MPU6500 Read Error!\r\n");
+    }
+}
 
-    /* 初始化两个电机: dt=10ms, Kp=0.4, Ki=1.5, Kd=0 */
+/* ==================== 系统初始化 ==================== */
+
+static __attribute__((noinline)) void system_setup(void) {
+    NVIC_EnableIRQ(I2C_GYRO_INST_INT_IRQN);
+    NVIC_EnableIRQ(UART_GYRO_INST_INT_IRQN);
+    DL_SYSCTL_disableSleepOnExit();
+
+    if (MPU6500_Init()) {
+        UART_Puts(&g_uart1, "MPU6500 OK!\r\n");
+    } else {
+        UART_Puts(&g_uart1, "MPU6500 FAILED!\r\n");
+        while(1);
+    }
+
     motor_control_init(1, 0.01f, 0.4f, 1.5f, 0.0f);
     motor_control_init(2, 0.01f, 0.4f, 1.5f, 0.0f);
 
-    /* 启动 TIMER_0 (TIMG12, 10ms PERIODIC) */
     NVIC_ClearPendingIRQ(TIMER_0_INST_INT_IRQN);
     NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
     DL_TimerG_startCounter(TIMER_0_INST);
 
-    /* 闭环转向控制: 灰度循线(模式A) + 陀螺仪直行(模式B) */
     Steering_Init();
     trajectory_set_feedback(Steering_GetCorrection);
     trajectory_enable_closed_loop(1);
+}
 
-    UART_Puts(&g_uart0, "Dual Motor Control Ready\r\n");
-    cmd_show();
+/* ==================== Main (noinline 拆分防止编译器常量岛 bug) ==================== */
 
-    /*
-     * ====== 测试代码 (取消注释一项即可) =====
-     */
-    trajectory_straight(0.9f, 0.3f);              // 直线前进 1m @ 0.1m/s
-    /* trajectory_straight(0.5f, 0.2f); */        // 直线前进 0.5m 稍快
-    /* trajectory_circle(0.5f, 0.1f, +1); */      // 左转圈 R=0.5m
-    /* trajectory_circle(0.5f, 0.1f, -1); */      // 右转圈 R=0.5m
-    /* trajectory_arc(0.3f,3.1416f,0.1f,+1); */   // 半圆左转 R=0.3m
-
+static __attribute__((noinline)) void main_loop(void) {
     while (1) {
         cmd_poll();
         if (g_fw_ready) {
             g_fw_ready = 0;
             firewater_send();
         }
+        gyro_poll();
     }
+}
+
+int main(void)
+{
+    SYSCFG_DL_init();
+    UART_Init();
+    delay_cycles(CPUCLK_FREQ * 1);
+    UART_RxEnable();
+    __enable_irq();
+
+    system_setup();
+
+    UART_Puts(&g_uart0, "Dual Motor Control Ready\r\n");
+    cmd_show();
+
+    trajectory_straight(0.9f, 0.3f);
+
+    main_loop();
 }

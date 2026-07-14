@@ -10,6 +10,7 @@ C_SRCS += \
 ../Drivers/gyro_pid.c \
 ../Drivers/line_pid.c \
 ../Drivers/motor.c \
+../Drivers/mpu6500.c \
 ../Drivers/steering.c \
 ../Drivers/trajectory.c \
 ../Drivers/uart.c 
@@ -19,6 +20,7 @@ C_DEPS += \
 ./Drivers/gyro_pid.d \
 ./Drivers/line_pid.d \
 ./Drivers/motor.d \
+./Drivers/mpu6500.d \
 ./Drivers/steering.d \
 ./Drivers/trajectory.d \
 ./Drivers/uart.d 
@@ -28,6 +30,7 @@ OBJS += \
 ./Drivers/gyro_pid.o \
 ./Drivers/line_pid.o \
 ./Drivers/motor.o \
+./Drivers/mpu6500.o \
 ./Drivers/steering.o \
 ./Drivers/trajectory.o \
 ./Drivers/uart.o 
@@ -37,6 +40,7 @@ OBJS__QUOTED += \
 "Drivers\gyro_pid.o" \
 "Drivers\line_pid.o" \
 "Drivers\motor.o" \
+"Drivers\mpu6500.o" \
 "Drivers\steering.o" \
 "Drivers\trajectory.o" \
 "Drivers\uart.o" 
@@ -46,6 +50,7 @@ C_DEPS__QUOTED += \
 "Drivers\gyro_pid.d" \
 "Drivers\line_pid.d" \
 "Drivers\motor.d" \
+"Drivers\mpu6500.d" \
 "Drivers\steering.d" \
 "Drivers\trajectory.d" \
 "Drivers\uart.d" 
@@ -55,6 +60,7 @@ C_SRCS__QUOTED += \
 "../Drivers/gyro_pid.c" \
 "../Drivers/line_pid.c" \
 "../Drivers/motor.c" \
+"../Drivers/mpu6500.c" \
 "../Drivers/steering.c" \
 "../Drivers/trajectory.c" \
 "../Drivers/uart.c" 
