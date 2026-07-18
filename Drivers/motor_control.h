@@ -10,6 +10,7 @@
 void motor_control_init(uint8_t motorID, float dt_sec,
                         float kp, float ki, float kd);
 void motor_control_set_speed(uint8_t motorID, int32_t rpm);
+void motor_control_update_target(uint8_t motorID, int32_t rpm); /* 仅改目标, 不重置PID */
 void motor_control_stop(uint8_t motorID);
 void motor_control_set_duty(uint8_t motorID, uint32_t duty);
 

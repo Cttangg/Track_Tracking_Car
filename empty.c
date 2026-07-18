@@ -114,6 +114,13 @@ static void cmd_do(const char *line) {
         } else UART_Puts(&g_uart0, "ERR: cir <R_m> <spd> <dir>\r\n");
         return;
     }
+    if (!strcmp(k, "lf")) {
+        if (sscanf(line, "lf %f", &v1) == 1) {
+            trajectory_linefollow(v1);
+            UART_Printf(&g_uart0, "OK lf v=%.2f\r\n", v1);
+        } else UART_Puts(&g_uart0, "ERR: lf <speed_mps>\r\n");
+        return;
+    }
 
     if (!strcmp(k, "stop")) {
         motor_control_stop(1); motor_control_stop(2);
@@ -185,13 +192,12 @@ static void cmd_poll(void) {
 
 static volatile int g_fw_ready = 0;
 static volatile int g_fw_div    = 0;
-static          int g_traj_div  = 0;
 
 void TIMER_0_INST_IRQHandler(void)
 {
     motor_control_update();
-    if (++g_traj_div >= 5) { g_traj_div = 0; trajectory_update(); }
-    if (++g_fw_div >= 5)   { g_fw_div = 0;   g_fw_ready = 1; }
+    trajectory_update();
+    if (++g_fw_div >= 5) { g_fw_div = 0; g_fw_ready = 1; }
     DL_TimerG_clearInterruptStatus(TIMER_0_INST, DL_TIMERG_INTERRUPT_ZERO_EVENT);
 }
 
@@ -217,8 +223,6 @@ int main(void)
 
     UART_Puts(&g_uart0, "Dual Motor Control Ready\r\n");
     cmd_show();
-    trajectory_straight(0.9f, 0.3f);
-
     while (1) {
         cmd_poll();
         if (g_fw_ready) { g_fw_ready = 0; firewater_send(); }

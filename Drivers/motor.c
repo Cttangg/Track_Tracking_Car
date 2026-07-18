@@ -189,6 +189,26 @@ void motor_control_set_speed(uint8_t motorID, int32_t rpm)
     }
 }
 
+void motor_control_update_target(uint8_t motorID, int32_t rpm)
+{
+    int idx = motorID - 1;
+    if (idx >= MOTOR_MAX) return;
+
+    g_mc[idx].manual_duty = -1;
+
+    if (rpm > 0) {
+        motor_set_direction(motorID, 0);
+        g_mc[idx].target_rpm = rpm;
+    } else if (rpm < 0) {
+        motor_set_direction(motorID, 1);
+        g_mc[idx].target_rpm = -rpm;
+    } else {
+        g_mc[idx].target_rpm = 0;
+        g_mc[idx].pid.output = 0;
+        motor_set_duty(motorID, 0);
+    }
+}
+
 void motor_control_stop(uint8_t motorID)
 {
     int idx = motorID - 1;

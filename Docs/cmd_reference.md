@@ -49,6 +49,7 @@
 | `st` | `<距离m> <速度m/s>` | `st 0.5 0.1` | `trajectory_straight` |
 | `arc` | `<R_m> <theta_rad> <速度> <方向±1>` | `arc 0.3 3.14 0.1 1` | `trajectory_arc` |
 | `cir` | `<R_m> <速度> <方向±1>` | `cir 0.5 0.1 -1` | `trajectory_circle` |
+| `lf` | `<速度m/s>` | `lf 0.3` | `trajectory_linefollow` (闭环循线, 无限) |
 | `stop_all` | 无 | `stop_all` | `trajectory_stop` (轨迹停车) |
 
 ### 传感器
