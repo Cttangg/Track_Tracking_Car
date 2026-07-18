@@ -87,15 +87,16 @@ static uint32_t measure_freq(int idx)
     return freq;
 }
 
-/* ==================== PID ==================== */
+/* ==================== PID (增量式) ==================== */
 
 #define PWM_MAX          4000
 #define PWM_MIN          0
-#define PID_INTEGRAL_MAX 5000.0f
 
 typedef struct {
     float Kp, Ki, Kd, dt;
-    float integral, prev_error;
+    float prev_error;       /* e(k-1) */
+    float prev2_error;      /* e(k-2) */
+    float output;           /* 累积输出 */
     float out_max, out_min;
 } PID_t;
 
@@ -103,22 +104,32 @@ static void pid_init(PID_t *p, float kp, float ki, float kd, float dt,
                      float omin, float omax)
 {
     p->Kp=kp; p->Ki=ki; p->Kd=kd; p->dt=dt;
-    p->integral=0; p->prev_error=0;
+    p->prev_error=0; p->prev2_error=0;
+    p->output=0;
     p->out_min=omin; p->out_max=omax;
 }
 
 static float pid_update(PID_t *p, float sp, float mv)
 {
     float e = sp - mv;
-    float d = (e - p->prev_error) / p->dt;
-    p->integral += e * p->dt;
-    if (p->integral > PID_INTEGRAL_MAX)      p->integral = PID_INTEGRAL_MAX;
-    else if (p->integral < -PID_INTEGRAL_MAX) p->integral = -PID_INTEGRAL_MAX;
-    p->prev_error = e;
-    float o = p->Kp*e + p->Ki*p->integral + p->Kd*d;
-    if (o > p->out_max) o = p->out_max;
-    if (o < p->out_min) o = p->out_min;
-    return o;
+
+    /*
+     * 增量式 PID:
+     *   delta = Kp*(e(k)-e(k-1)) + Ki*e(k)*dt + Kd*(e(k)-2*e(k-1)+e(k-2))/dt
+     *   天然抗积分饱和, 只需钳位最终输出.
+     */
+    float delta = p->Kp * (e - p->prev_error)
+                + p->Ki * e * p->dt
+                + p->Kd * (e - 2.0f * p->prev_error + p->prev2_error) / p->dt;
+
+    p->prev2_error = p->prev_error;
+    p->prev_error  = e;
+
+    p->output += delta;
+    if (p->output > p->out_max) p->output = p->out_max;
+    if (p->output < p->out_min) p->output = p->out_min;
+
+    return p->output;
 }
 
 /* ==================== 双电机控制状态 ==================== */
@@ -161,6 +172,10 @@ void motor_control_set_speed(uint8_t motorID, int32_t rpm)
 
     g_mc[idx].manual_duty = -1;
 
+    /* 目标变化时复位误差历史, 避免 D 项突变冲击 */
+    g_mc[idx].pid.prev_error  = 0;
+    g_mc[idx].pid.prev2_error = 0;
+
     if (rpm > 0) {
         motor_set_direction(motorID, 0);
         g_mc[idx].target_rpm = rpm;
@@ -169,6 +184,7 @@ void motor_control_set_speed(uint8_t motorID, int32_t rpm)
         g_mc[idx].target_rpm = -rpm;
     } else {
         g_mc[idx].target_rpm = 0;
+        g_mc[idx].pid.output = 0;
         motor_set_duty(motorID, 0);
     }
 }
@@ -202,8 +218,9 @@ void motor_control_update(void)
         uint32_t duty;
         if (g_mc[i].manual_duty >= 0) {
             duty = (uint32_t)g_mc[i].manual_duty;
-            g_mc[i].pid.integral = 0;
-            g_mc[i].pid.prev_error = 0;
+            g_mc[i].pid.prev_error  = 0;
+            g_mc[i].pid.prev2_error = 0;
+            g_mc[i].pid.output      = 0;
         } else if (g_mc[i].target_rpm > 0) {
             float df = pid_update(&g_mc[i].pid, (float)g_mc[i].target_rpm,
                                   (float)g_mc[i].actual_rpm);
@@ -211,8 +228,9 @@ void motor_control_update(void)
             duty = (uint32_t)df;
         } else {
             duty = 0;
-            g_mc[i].pid.integral = 0;
-            g_mc[i].pid.prev_error = 0;
+            g_mc[i].pid.prev_error  = 0;
+            g_mc[i].pid.prev2_error = 0;
+            g_mc[i].pid.output      = 0;
         }
 
         motor_set_duty(motorID, duty);

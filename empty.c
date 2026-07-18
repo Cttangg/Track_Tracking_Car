@@ -1,37 +1,4 @@
 /*
-//                            _ooOoo_  
-//                           o8888888o  
-//                           88" . "88  
-//                           (| -_- |)  
-//                            O\ = /O  
-//                        ____/`---'\____  
-//                      .   ' \\| |// `.  
-//                       / \\||| : |||// \  
-//                     / _||||| -:- |||||- \  
-//                       | | \\\ - /// | |  
-//                     | \_| ''\---/'' | |  
-//                      \ .-\__ `-` ___/-. /  
-//                   ___`. .' /--.--\ `. . __  
-//                ."" '< `.___\_<|>_/___.' >'"".  
-//               | | : `- \`.;`\ _ /`;.`/ - ` : | |  
-//                 \ \ `-. \_ __\ /__ _/ .-` / /  
-//         ======`-.____`-.___\_____/___.-`____.-'======  
-//                            `=---='  
-//  
-//         .............................................  
-//                  佛祖保佑             永无BUG 
-//          佛曰:  
-//                  写字楼里写字间，写字间里程序员；  
-//                  程序人员写程序，又拿程序换酒钱。  
-//                  酒醒只在网上坐，酒醉还来网下眠；  
-//                  酒醉酒醒日复日，网上网下年复年。  
-//                  但愿老死电脑间，不愿鞠躬老板前；  
-//                  奔驰宝马贵者趣，公交自行程序员。  
-//                  别人笑我忒疯癫，我笑自己命太贱；  
-//                  不见满街漂亮妹，哪个归得程序员？
-*/
-
-/*
  * Dual Motor PID Speed Control
  * =============================
  * Motor 1: AIN1=PA8, AIN2=PA9, PWM=PA12(TIMG0 CCP0), Enc=PA17(TIMA1)
@@ -51,16 +18,10 @@
 
 #define CMD_BUF_SIZE      64
 
-/* ==================== UART ====================
- * 收发统一走通用串口库 (g_uart0): TX 环形缓冲+中断, RX 中断入环形缓冲。
- * 命令解析仍在本文件 (应用层), 不写入通用库。 */
+/* ==================== UART ==================== */
 
-/* firewater: 9 channels — T1,R1,D1,F1,T2,R2,D2,F2,S (S=灰度传感器8bit二进制)
- * 用已验证可用的 sprintf + UART_Puts 路径; 电机状态先发, 灰度位后发。 */
 static void firewater_send(void) {
     static char b[96];
-
-    /* 1) 电机状态 (8 字段 + 逗号), 优先发出 */
     int n = sprintf(b, "%d,%d,%d,%d,%d,%d,%d,%d,",
         (int)motor_control_get_target_rpm(1),
         (int)motor_control_get_actual_rpm(1),
@@ -72,7 +33,6 @@ static void firewater_send(void) {
         (int)motor_control_get_freq(2));
     if (n > 0) UART_Puts(&g_uart0, b);
 
-    /* 2) 灰度传感器 8bit 二进制 + 换行 */
     uint8_t sensor = Grayscale_Read();
     char sbits[11];
     for (int i = 7; i >= 0; i--)
@@ -96,18 +56,8 @@ static void cmd_show(void) {
         (int)motor_control_get_actual_rpm(2),
         (int)motor_control_get_duty(2),
         (int)motor_control_get_freq(2));
-    /* 帮助 */
-    UART_Puts(&g_uart0,
-        "--- HELP ---\r\n"
-        "Motor: Tr1|Tr2 <rpm>  Kp1|Kp2 <v>  Ki1|Ki2 <v>  Kd1|Kd2 <v>\r\n"
-        "       Dd1|Dd2 <dut>  stop1|stop2  Tr <rpm>  Dd <dut>  stop\r\n"
-        "Traj:  st <dist> <v>  arc <R> <th> <v> <dir>  cir <R> <v> <dir>\r\n"
-        "       stop_all\r\n"
-        "Sensor: gs\r\n"
-        "------------\r\n");
 }
 
-/* 命令解析: 先取第一个 token 作为命令名, 按命令匹配参数 */
 static void cmd_do(const char *line) {
     char k[16] = {0};
     float v1 = 0, v2 = 0, v3 = 0;
@@ -116,7 +66,6 @@ static void cmd_do(const char *line) {
     if (line[0] == '\0') return;
     sscanf(line, "%15s", k);
 
-    /* ---- 无参数命令 ---- */
     if (!strcmp(k, "?"))      { cmd_show(); return; }
     if (!strcmp(k, "stop_all")) { trajectory_stop(); UART_Puts(&g_uart0, "OK all stopped\r\n"); return; }
     if (!strcmp(k, "gs")) {
@@ -127,7 +76,6 @@ static void cmd_do(const char *line) {
         return;
     }
 
-    /* ---- 闭环转向 PID 参数 ---- */
     if (sscanf(line, "%*s %f", &v1) >= 1) {
         if (!strcmp(k, "Lp")) { LinePID_SetKp(v1); UART_Printf(&g_uart0, "OK Lp=%.3f\r\n", v1); return; }
         if (!strcmp(k, "Li")) { LinePID_SetKi(v1); UART_Printf(&g_uart0, "OK Li=%.3f\r\n", v1); return; }
@@ -141,13 +89,10 @@ static void cmd_do(const char *line) {
         if (sscanf(line, "mode %d", &m) == 1) {
             Steering_SetMode((uint8_t)m);
             UART_Printf(&g_uart0, "OK mode %s\r\n", m==0?"A(line)":"B(gyro)");
-        } else {
-            UART_Puts(&g_uart0, "ERR: mode 0(A/line) or 1(B/gyro)\r\n");
-        }
+        } else UART_Puts(&g_uart0, "ERR: mode 0(A/line) or 1(B/gyro)\r\n");
         return;
     }
 
-    /* ---- 轨迹: st <dist> <speed> ---- */
     if (!strcmp(k, "st")) {
         if (sscanf(line, "st %f %f", &v1, &v2) == 2) {
             trajectory_straight(v1, v2);
@@ -155,7 +100,6 @@ static void cmd_do(const char *line) {
         } else UART_Puts(&g_uart0, "ERR: st <dist_m> <speed_mps>\r\n");
         return;
     }
-    /* ---- 轨迹: arc <R> <theta> <speed> <dir> ---- */
     if (!strcmp(k, "arc")) {
         if (sscanf(line, "arc %f %f %f %d", &v1, &v2, &v3, &dir) == 4) {
             trajectory_arc(v1, v2, v3, dir);
@@ -163,7 +107,6 @@ static void cmd_do(const char *line) {
         } else UART_Puts(&g_uart0, "ERR: arc <R_m> <th_rad> <spd> <dir>\r\n");
         return;
     }
-    /* ---- 轨迹: cir <R> <speed> <dir> ---- */
     if (!strcmp(k, "cir")) {
         if (sscanf(line, "cir %f %f %d", &v1, &v2, &dir) == 3) {
             trajectory_circle(v1, v2, dir);
@@ -172,7 +115,6 @@ static void cmd_do(const char *line) {
         return;
     }
 
-    /* ---- 双电机（无后缀）---- */
     if (!strcmp(k, "stop")) {
         motor_control_stop(1); motor_control_stop(2);
         UART_Puts(&g_uart0, "OK both stopped\r\n"); return;
@@ -194,7 +136,6 @@ static void cmd_do(const char *line) {
         return;
     }
 
-    /* ---- 旧命令: 末尾数字提取 motorID (1/2) ---- */
     {
         int len = (int)strlen(k);
         int id = 0;
@@ -202,10 +143,7 @@ static void cmd_do(const char *line) {
             id = k[len - 1] - '0';
             k[len - 1] = '\0';
         }
-        if (id == 0) {
-            UART_Printf(&g_uart0, "ERR: unknown cmd '%s'\r\n", k);
-            return;
-        }
+        if (id == 0) { UART_Printf(&g_uart0, "ERR: unknown cmd '%s'\r\n", k); return; }
         float v = 0;
         if (sscanf(line, "%*s %f", &v) < 1 && strcmp(k, "stop")) {
             UART_Printf(&g_uart0, "ERR: M%d %s needs value\r\n", id, k);
@@ -229,14 +167,10 @@ static void cmd_do(const char *line) {
         } else if (!strcmp(k, "stop")) {
             motor_control_stop((uint8_t)id);
             UART_Printf(&g_uart0, "OK M%d stopped\r\n", id);
-        } else {
-            UART_Printf(&g_uart0, "ERR: %s\r\n", k);
-        }
+        } else { UART_Printf(&g_uart0, "ERR: %s\r\n", k); }
     }
 }
 
-/* 从通用库 RX 环形缓冲取字节, 本文件组装成行后交给 cmd_do。
- * 每轮限量处理, 防止 RX 持续来数据 (如 PA11 噪声) 时独占主循环, 保证 firewater 能被调用。 */
 static void cmd_poll(void) {
     static char b[CMD_BUF_SIZE]; static int i=0;
     uint8_t c;
@@ -250,16 +184,14 @@ static void cmd_poll(void) {
 /* ==================== TIMG12 ISR ==================== */
 
 static volatile int g_fw_ready = 0;
-static int g_fw_div = 0;   /* 降频计数器: 每5次ISR发一次firewater */
+static volatile int g_fw_div    = 0;
+static          int g_traj_div  = 0;
 
 void TIMER_0_INST_IRQHandler(void)
 {
     motor_control_update();
-    trajectory_update();
-    if (++g_fw_div >= 5) {
-        g_fw_div = 0;
-        g_fw_ready = 1;
-    }
+    if (++g_traj_div >= 5) { g_traj_div = 0; trajectory_update(); }
+    if (++g_fw_div >= 5)   { g_fw_div = 0;   g_fw_ready = 1; }
     DL_TimerG_clearInterruptStatus(TIMER_0_INST, DL_TIMERG_INTERRUPT_ZERO_EVENT);
 }
 
@@ -268,41 +200,27 @@ void TIMER_0_INST_IRQHandler(void)
 int main(void)
 {
     SYSCFG_DL_init();
-    UART_Init();          /* 通用串口库: 初始化 g_uart0 (仅 TX, 不开 RX 中断) */
-    delay_cycles(CPUCLK_FREQ * 1);   /* 静默 1 秒, 等硬件就绪 */
-    UART_RxEnable();                  /* PA11 稳定后再开 RX 中断, 先清空残留噪声 */
+    UART_Init();
+    delay_cycles(CPUCLK_FREQ * 1);
+    UART_RxEnable();
 
-    /* 初始化两个电机: dt=10ms, Kp=0.4, Ki=1.5, Kd=0 */
-    motor_control_init(1, 0.01f, 0.4f, 1.5f, 0.0f);
-    motor_control_init(2, 0.01f, 0.4f, 1.5f, 0.0f);
+    motor_control_init(1, 0.01f, 2.0f, 10.0f, 0.0f);
+    motor_control_init(2, 0.01f, 2.0f, 10.0f, 0.0f);
 
-    /* 启动 TIMER_0 (TIMG12, 10ms PERIODIC) */
     NVIC_ClearPendingIRQ(TIMER_0_INST_INT_IRQN);
     NVIC_EnableIRQ(TIMER_0_INST_INT_IRQN);
     DL_TimerG_startCounter(TIMER_0_INST);
 
-    /* 闭环转向控制: 灰度循线(模式A) + 陀螺仪直行(模式B) */
     Steering_Init();
     trajectory_set_feedback(Steering_GetCorrection);
     trajectory_enable_closed_loop(1);
 
     UART_Puts(&g_uart0, "Dual Motor Control Ready\r\n");
     cmd_show();
-
-    /*
-     * ====== 测试代码 (取消注释一项即可) =====
-     */
-    trajectory_straight(0.9f, 0.3f);              // 直线前进 1m @ 0.1m/s
-    /* trajectory_straight(0.5f, 0.2f); */        // 直线前进 0.5m 稍快
-    /* trajectory_circle(0.5f, 0.1f, +1); */      // 左转圈 R=0.5m
-    /* trajectory_circle(0.5f, 0.1f, -1); */      // 右转圈 R=0.5m
-    /* trajectory_arc(0.3f,3.1416f,0.1f,+1); */   // 半圆左转 R=0.3m
+    trajectory_straight(0.9f, 0.3f);
 
     while (1) {
         cmd_poll();
-        if (g_fw_ready) {
-            g_fw_ready = 0;
-            firewater_send();
-        }
+        if (g_fw_ready) { g_fw_ready = 0; firewater_send(); }
     }
 }

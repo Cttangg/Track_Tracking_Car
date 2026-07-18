@@ -497,18 +497,40 @@ void UART_ISR_Handler(UART_Port *port)
 {
     UART_Regs *inst = port->inst;
     DL_UART_IIDX idx;
+    int loop_limit = 128;  /* 安全阀: 防止死循环 */
 
-    while ((idx = DL_UART_Main_getPendingInterrupt(inst)) != DL_UART_IIDX_NO_INTERRUPT) {
+    while (loop_limit-- > 0 &&
+           (idx = DL_UART_Main_getPendingInterrupt(inst)) != DL_UART_IIDX_NO_INTERRUPT) {
         switch (idx) {
-        case DL_UART_MAIN_IIDX_RX:                 /* RX FIFO 有数据: 全部搬走 */
+        case DL_UART_MAIN_IIDX_RX:
             while (!DL_UART_isRXFIFOEmpty(inst))
                 rx_byte(port, DL_UART_Main_receiveData(inst));
             break;
 
-        case DL_UART_IIDX_OVERRUN_ERROR: port->err.hw_overrun++; break;
-        case DL_UART_IIDX_FRAMING_ERROR: port->err.framing++;    break;
-        case DL_UART_IIDX_PARITY_ERROR:  port->err.parity++;     break;
-        default: break;
+        case DL_UART_IIDX_OVERRUN_ERROR:
+            port->err.hw_overrun++;
+            if (!DL_UART_isRXFIFOEmpty(inst))
+                (void)DL_UART_Main_receiveData(inst);   /* 读一次清错误 */
+            break;
+
+        case DL_UART_IIDX_FRAMING_ERROR:
+            port->err.framing++;
+            if (!DL_UART_isRXFIFOEmpty(inst))
+                (void)DL_UART_Main_receiveData(inst);
+            break;
+
+        case DL_UART_IIDX_PARITY_ERROR:
+            port->err.parity++;
+            if (!DL_UART_isRXFIFOEmpty(inst))
+                (void)DL_UART_Main_receiveData(inst);
+            break;
+
+        default:
+            /* 未知中断: 清掉所有可能的中断标志以防死循环 */
+            (void)DL_UART_Main_getPendingInterrupt(inst);
+            if (!DL_UART_isRXFIFOEmpty(inst))
+                (void)DL_UART_Main_receiveData(inst);
+            break;
         }
     }
 }
