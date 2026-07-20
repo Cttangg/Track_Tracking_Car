@@ -3,9 +3,9 @@
 /* ============================================================
  * 陀螺仪直行 PID — 实现
  * ------------------------------------------------------------
- * 陀螺仪: UART1 接入 (当前未连接)
- *   Gyro_ReadYawRate() 当前返回 0 → PID 输出恒 0 → 小车靠前馈走直线。
- *   陀螺仪接入后替换本函数实现即可, PID 层无需改动。
+ * 陀螺仪: I2C MPU6500 接入 (I2C_GYRO)
+ *   Gyro_ReadYawRate() 从 empty.c 的全局变量 g_yaw_rate 读取
+ *   当前 Z 轴角速率 (°/s), 由 IMU_UpdateAttitude() 在主循环中持续更新。
  *
  * PID 原理:
  *   error = 0 − ω_z         (目标 yaw rate = 0, 保持航向)
@@ -15,29 +15,30 @@
 #define MAX_CORR  0.15f
 #define MAX_INTEG 0.30f
 
+/* 来自 empty.c 的全局 yaw rate (单位: °/s), 由 IMU_UpdateAttitude() 实时更新 */
+extern volatile float g_yaw_rate;
+
 static struct {
     float Kp, Ki, Kd, dt;
     float integral, prev_error;
     uint8_t init;
 } g_pid;
 
-/* ==================== 陀螺仪底层 (UART1 预留) ==================== */
+/* ==================== 陀螺仪底层 (I2C MPU6500) ==================== */
 
 void Gyro_Init(void)
 {
-    /* TODO: 配置 UART1 (需在 SysConfig 添加 UART_1_INST, 并取消 uart.h 中 UART1_ENABLE 注释)
-     *       UART_Init() 已在 empty.c 中调用, 届时会自动初始化 g_uart1。
-     *       然后通过 UART1 配置陀螺仪寄存器, 启动数据输出。
+    /* MPU6500 的完整初始化 (含 Z 轴零偏校准) 已在 empty.c 的 main() 中完成。
+     * 本函数保留作为占位，供 Steering_Init() 统一调用。
      */
 }
 
 float Gyro_ReadYawRate(void)
 {
-    /* TODO: 从 g_uart1 读取陀螺仪 UART 数据帧, 解析 yaw rate (rad/s)
-     *       例: MPU6050 DMP 输出格式、或自定义协议帧。
-     *       当前返回 0 — 未连接陀螺仪时小车仅靠前馈直线行驶。
+    /* 从 empty.c 的 IMU_UpdateAttitude() 获取实时 Z 轴角速率 (°/s)。
+     * 该值已经过零偏校准、动态漂移补偿和死区过滤。
      */
-    return 0.0f;
+    return g_yaw_rate;
 }
 
 /* ==================== PID ==================== */

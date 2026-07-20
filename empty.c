@@ -13,10 +13,132 @@
 #include "./Drivers/line_pid.h"
 #include "./Drivers/gyro_pid.h"
 #include "./Drivers/uart.h"
+#include "./Drivers/mpu6500.h"
+#include "./Drivers/filter.h"
 #include "stdio.h"
 #include <string.h>
+#include <math.h>
 
 #define CMD_BUF_SIZE      64
+#define SAMPLE_DT         0.01f           // 维持 10ms (100Hz) 高频采样解算
+#define YAW_RESET_INTERVAL_CYCLES  3000   // 对应mpu6500方案 4 的 30 秒评估周期（30秒 / 0.01秒 = 3000帧）
+#define STATIONARY_THRESHOLD_CYCLES 300   // 使用陀螺仪时判定小车真正进入“绝对静止”的持续帧数阈值（3秒 = 300帧）
+
+/* ------------------------------------------------------------------
+ * 封装姿态数据结构体
+ * ------------------------------------------------------------------ */
+typedef struct {
+    float roll;  // X 轴角度
+    float pitch; // Y 轴角度
+    float yaw;   // Z 轴角度（小车转向角）
+} IMU_Attitude;
+
+// 全局姿态变量
+volatile IMU_Attitude g_myCarAngle = {0.0f, 0.0f, 0.0f};
+volatile bool g_is_calibrated = false;      // 校准完成标志位
+
+// 全局 yaw rate 供 gyro_pid 模块读取 (单位: °/s)
+volatile float g_yaw_rate = 0.0f;
+
+// 声明全局滤波器实例与 Z 轴积分变量
+BiquadFilter xFilter, yFilter;
+KalmanFilter2D kfX, kfY;
+float raw_angle_z = 0.0f;
+
+// Z 轴陀螺仪静态零偏存储变量
+float gyro_z_offset = 0.0f;
+
+/* ==================================================================
+ * 【新增强调】对应方案 4 的动态漂移补偿全套变量组
+ * ================================================================== */
+float yaw_drift_rate = 0.0f;           // 实时估计出的动态漂移率（度/秒）
+uint32_t total_cycles_since_reset = 0; // 自上次重置以来走过的总帧数（用于代替微秒计时器）
+uint32_t stationary_cycles = 0;        // 连续静止的帧数计数器
+
+/* ------------------------------------------------------------------
+ * mpu6500功能函数
+ * ------------------------------------------------------------------ */
+bool IMU_UpdateAttitude(volatile IMU_Attitude *attitude) {
+    MPU6500_IMUData imuData;
+
+    // 读取 6 轴全数据
+    if (!MPU6500_ReadIMU(&imuData)) {
+        return false;
+    }
+
+    // ---- 【X/Y 轴姿态解算】 ---- (完全维持原样，未做任何改动)
+    float accAngleX = atan2f(imuData.accel_y, imuData.accel_z) * 57.29578f;
+    float accAngleY = atan2f(-imuData.accel_x, sqrtf(imuData.accel_y * imuData.accel_y + imuData.accel_z * imuData.accel_z)) * 57.29578f;
+
+    float lowpassAccX = Biquad_Process(&xFilter, accAngleX);
+    float lowpassAccY = Biquad_Process(&yFilter, accAngleY);
+
+    Kalman2D_Predict(&kfX);
+    Kalman2D_Predict(&kfY);
+    Kalman2D_Update(&kfX, lowpassAccX, imuData.gyro_x);
+    Kalman2D_Update(&kfY, lowpassAccY, imuData.gyro_y);
+
+    attitude->roll  = kfX.x[0];
+    attitude->pitch = kfY.x[0];
+
+    // ---- 【Z 轴航向角解算 - 融合方案4漂移补偿】 ----
+
+    // 1. 基础校准：减去开机测得的静态零偏
+    float corrected_gyro_z = imuData.gyro_z - gyro_z_offset;
+
+    // 2. 智能化静止状态检测（基于新代码方案4的 IsStationary 思想）
+    // 检查三轴陀螺仪当前的瞬时速度是否全部逼近 0（判断小车是否完全停稳）
+    bool is_stationary = (fabsf(imuData.gyro_x) < 1.5f) &&
+                         (fabsf(imuData.gyro_y) < 1.5f) &&
+                         (fabsf(corrected_gyro_z) < 1.5f);
+
+    total_cycles_since_reset++; // 周期总计数递增
+
+    if (is_stationary) {
+        stationary_cycles++; // 静止计时递增
+
+        // 方案 4 核心：如果总时间走满了 30 秒，且当前小车已经连续安全静止了 3 秒以上
+        if (total_cycles_since_reset >= YAW_RESET_INTERVAL_CYCLES &&
+            stationary_cycles >= STATIONARY_THRESHOLD_CYCLES) {
+
+            // 计算过去这 30 秒内真实的动态温漂速率（当前累积角度 / 过去的总时间）
+            float elapsed_time = total_cycles_since_reset * SAMPLE_DT;
+            yaw_drift_rate = raw_angle_z / elapsed_time;
+
+            // 如果漂移率极小（说明车辆确实没动，只是传感器在自己乱飘）
+            if (fabsf(yaw_drift_rate) < 0.1f) {
+                raw_angle_z = 0.0f; // 强制洗白重置当前偏航角
+                total_cycles_since_reset = 0; // 重新开启下一轮 30 秒的数据观测
+                stationary_cycles = 0;
+            }
+        }
+    } else {
+        // 如果小车在运动，立刻清零静止帧计数，保护正常转弯数据不被动态漂移算法误伤
+        stationary_cycles = 0;
+    }
+
+    // 3. 实时扣除估计出来的动态温漂率
+    float final_gyro_z_rate = corrected_gyro_z - yaw_drift_rate;
+
+    // 4. 死区拦截：过滤极其微小的瞬时残余白噪声（采用新代码推荐的 0.3°/s 精细死区）
+    if (fabsf(final_gyro_z_rate) < 0.3f) {
+        final_gyro_z_rate = 0.0f;
+    }
+
+    // 将当前的 Z 轴角速率暴露给 gyro_pid 模块 (单位: °/s)
+    g_yaw_rate = final_gyro_z_rate;
+
+    // 5. 高频无延迟积分
+    raw_angle_z += final_gyro_z_rate * SAMPLE_DT;
+
+    // 6. 角度归一化范围限制 (-180 ~ +180度)
+    while (raw_angle_z >= 180.0f) raw_angle_z -= 360.0f;
+    while (raw_angle_z < -180.0f) raw_angle_z += 360.0f;
+
+    attitude->yaw = raw_angle_z;
+
+    return true;
+}
 
 /* ==================== UART ==================== */
 
@@ -201,6 +323,8 @@ void TIMER_0_INST_IRQHandler(void)
     DL_TimerG_clearInterruptStatus(TIMER_0_INST, DL_TIMERG_INTERRUPT_ZERO_EVENT);
 }
 
+
+
 /* ==================== Main ==================== */
 
 int main(void)
@@ -210,6 +334,18 @@ int main(void)
     delay_cycles(CPUCLK_FREQ * 1);
     UART_RxEnable();
 
+    // ---- IMU 相关：使能 I2C 中断、禁用休眠 ----
+    NVIC_SetPriority(I2C_GYRO_INST_INT_IRQN, 0);
+    NVIC_EnableIRQ(I2C_GYRO_INST_INT_IRQN);
+    DL_SYSCTL_disableSleepOnExit();
+
+    // ---- 滤波器初始化 ----
+    Biquad_Init(&xFilter, 0.0133592f, 0.0267184f, 0.0133592f, 1.0f, -1.64745998f, 0.70089678f);
+    Biquad_Init(&yFilter, 0.0133592f, 0.0267184f, 0.0133592f, 1.0f, -1.64745998f, 0.70089678f);
+    Kalman2D_Init(&kfX, SAMPLE_DT);
+    Kalman2D_Init(&kfY, SAMPLE_DT);
+
+    // ---- 电机初始化 ----
     motor_control_init(1, 0.01f, 2.0f, 10.0f, 0.0f);
     motor_control_init(2, 0.01f, 2.0f, 10.0f, 0.0f);
 
@@ -221,10 +357,46 @@ int main(void)
     trajectory_set_feedback(Steering_GetCorrection);
     trajectory_enable_closed_loop(1);
 
+    // ---- MPU6500 硬件校准 ----
+    if (MPU6500_Init()) {
+        UART_Puts(&g_uart0, "MPU6500 Init OK! Calibrating Z-Gyro, KEEP STILL...\r\n");
+
+        float gyro_z_sum = 0.0f;
+        int valid_samples = 0;
+
+        while (valid_samples < 200) {
+            MPU6500_IMUData calData;
+            if (MPU6500_ReadIMU(&calData)) {
+                gyro_z_sum += calData.gyro_z;
+                valid_samples++;
+            }
+            delay_cycles(320000); // 约 10ms 间隔采样
+        }
+        gyro_z_offset = gyro_z_sum / 200.0f;
+
+        UART_Printf(&g_uart0, "Calibration Done! Offset: %.4f °/s. System Ready!\r\n", gyro_z_offset);
+
+        // 允许姿态解算
+        g_is_calibrated = true;
+    } else {
+        UART_Puts(&g_uart0, "MPU6500 Initialize FAILED!\r\n");
+        // 不阻塞：MPU6500 初始化失败时小车仍可正常行驶（无陀螺仪辅助）
+    }
+
     UART_Puts(&g_uart0, "Dual Motor Control Ready\r\n");
     cmd_show();
+
     while (1) {
         cmd_poll();
-        if (g_fw_ready) { g_fw_ready = 0; firewater_send(); }
+
+        // IMU 姿态解算：在主循环中持续运行，更新姿态和 yaw rate
+        if (g_is_calibrated) {
+            IMU_UpdateAttitude(&g_myCarAngle);
+        }
+
+        if (g_fw_ready) {
+            g_fw_ready = 0;
+            firewater_send();
+        }
     }
 }

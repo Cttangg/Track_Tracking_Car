@@ -6,13 +6,13 @@
 /* ============================================================
  * 模式 B — 陀螺仪直行 PID
  * ------------------------------------------------------------
- * 陀螺仪经 UART1 接入 (当前未连接, 预留接口, 返回恒 0)。
- * 接入后用 Gyro_ReadYawRate() 获取 ω_z (rad/s),
+ * 陀螺仪经 I2C MPU6500 接入 (I2C_GYRO)。
+ * 用 Gyro_ReadYawRate() 获取 ω_z (°/s),
  * PID 使 ω_z → 0, 即小车保持直线航向。
  * ============================================================ */
 
-void Gyro_Init(void);               /* 预留: UART1 陀螺仪初始化 */
-float Gyro_ReadYawRate(void);       /* 预留: 读偏航角速度 rad/s, 当前返回 0 */
+void Gyro_Init(void);               /* 占位: MPU6500 初始化已在 empty.c 中完成 */
+float Gyro_ReadYawRate(void);       /* 读偏航角速度 °/s, 来自 IMU_UpdateAttitude() */
 
 void  GyroPID_Init(float kp, float ki, float kd);
 void  GyroPID_SetKp(float kp);
