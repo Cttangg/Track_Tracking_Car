@@ -4,7 +4,7 @@
 /* ==================== 机器人硬件常量 (需按实车标定) ==================== */
 
 #define WHEEL_BASE     0.14f     /* 左右轮距 L (m) */
-#define WHEEL_RADIUS   0.048f    /* 轮子半径 r (m) */
+#define WHEEL_RADIUS   0.024f    /* 轮子半径 (m), 直径 0.048m */
 #define GEAR_RATIO     20.0f     /* 减速比 1:20, 电机轴 = 输出轴 × 20 */
 #define CTRL_DT        0.01f     /* 控制周期 (s), 由 TIMG12 10ms ISR 保证 */
 
@@ -82,12 +82,12 @@ static void apply_speed(void)
     if (g_traj.closed_loop && g_traj.feedback)
         corr = g_traj.feedback();
 
-    float v_L = g_traj.ff_v_L - corr;
-    float v_R = g_traj.ff_v_R + corr;
+    float v_L = g_traj.ff_v_L + corr;
+    float v_R = g_traj.ff_v_R - corr;
 
-    motor_control_set_speed(MOTOR_L_ID,
+    motor_control_update_target(MOTOR_L_ID,
         (int32_t)(v_L * MPS_TO_MOTOR_RPM) * MOTOR_L_SIGN);
-    motor_control_set_speed(MOTOR_R_ID,
+    motor_control_update_target(MOTOR_R_ID,
         (int32_t)(v_R * MPS_TO_MOTOR_RPM) * MOTOR_R_SIGN);
 }
 
@@ -148,6 +148,26 @@ int trajectory_straight(float distance, float v_target)
     return trajectory_run_path(&g_single, 1, 0);
 }
 
+int trajectory_linefollow(float v_target)
+{
+    if (v_target <= 0.0f) return -1;
+
+    float rpm = v_target * MPS_TO_MOTOR_RPM;
+
+    /* num_segs=0 触发 trajectory_update 中的循迹分支 */
+    g_traj.segs     = 0;
+    g_traj.num_segs = 0;
+    g_traj.loop     = 0;
+
+    /* ff_v_L 存储基础 RPM, trajectory_update 循迹分支读出叠加修正 */
+    g_traj.ff_v_L = rpm;
+    g_traj.ff_v_R = rpm;
+
+    g_traj.status          = TRAJ_RUNNING;
+    g_traj.remaining_ticks = 0;
+    return 0;
+}
+
 void trajectory_stop(void)
 {
     g_traj.status          = TRAJ_IDLE;
@@ -163,6 +183,18 @@ void trajectory_stop(void)
 void trajectory_update(void)
 {
     if (g_traj.status != TRAJ_RUNNING) return;
+
+    /* 循迹模式 (trajectory_linefollow): 无段调度, 直接叠加闭环修正到电机 */
+    if (g_traj.num_segs == 0 && g_traj.closed_loop && g_traj.feedback) {
+        float corr = g_traj.feedback();
+        float base_rpm = g_traj.ff_v_L;  /* 存基础 RPM (在 linefollow 中设置) */
+        float delta_rpm = corr * MPS_TO_MOTOR_RPM;
+        motor_control_update_target(MOTOR_L_ID,
+            (int32_t)((base_rpm + delta_rpm) * MOTOR_L_SIGN));
+        motor_control_update_target(MOTOR_R_ID,
+            (int32_t)((base_rpm - delta_rpm) * MOTOR_R_SIGN));
+        return;
+    }
 
     apply_speed();      /* 每 tick 下发 (便于闭环叠加修正) */
 

@@ -1,0 +1,7 @@
+.opencode/
+.settings/
+Debug/
+.ccsproject
+.clangd
+.cproject
+.project

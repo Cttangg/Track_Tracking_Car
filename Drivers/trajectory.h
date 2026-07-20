@@ -64,6 +64,7 @@ int trajectory_run_path(const traj_segment_t *segs, uint8_t num, uint8_t loop);
 int trajectory_arc(float R, float theta, float v_target, int direction);
 int trajectory_circle(float R, float v_target, int direction);   /* loop 圆周 */
 int trajectory_straight(float distance, float v_target);
+int trajectory_linefollow(float v_target);  /* 循迹模式: 指定速度, 闭环循线 */
 
 void trajectory_stop(void);
 
