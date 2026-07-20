@@ -1,5 +1,6 @@
 #include "trajectory.h"
 #include "motor_control.h"
+#include "line_pid.h"
 
 /* ==================== 机器人硬件常量 (需按实车标定) ==================== */
 
@@ -184,15 +185,25 @@ void trajectory_update(void)
 {
     if (g_traj.status != TRAJ_RUNNING) return;
 
-    /* 循迹模式 (trajectory_linefollow): 无段调度, 直接叠加闭环修正到电机 */
+    /* 循迹模式 (trajectory_linefollow): 无段调度, EMA低通+降频到20Hz */
     if (g_traj.num_segs == 0 && g_traj.closed_loop && g_traj.feedback) {
+        static float corr_filt = 0.0f;
+        static int   lf_div    = 0;
         float corr = g_traj.feedback();
-        float base_rpm = g_traj.ff_v_L;  /* 存基础 RPM (在 linefollow 中设置) */
-        float delta_rpm = corr * MPS_TO_MOTOR_RPM;
-        motor_control_update_target(MOTOR_L_ID,
-            (int32_t)((base_rpm + delta_rpm) * MOTOR_L_SIGN));
-        motor_control_update_target(MOTOR_R_ID,
-            (int32_t)((base_rpm - delta_rpm) * MOTOR_R_SIGN));
+        corr_filt = 0.3f * corr + 0.7f * corr_filt;   /* EMA 低通平滑 */
+        if (++lf_div >= 5) {
+            lf_div = 0;
+            /* 速度调制: 越偏线越慢, 中心最快 */
+            float err = LinePID_GetAbsError();            /* 0(居中) ~ 3.5(边缘) */
+            float spd = 1.0f - 0.15f * err;               /* 中心=1.0 边缘≈0.48 */
+            if (spd < 0.4f) spd = 0.4f;                   /* 最低 40% */
+            float base_rpm  = g_traj.ff_v_L * spd;
+            float delta_rpm = corr_filt * MPS_TO_MOTOR_RPM;
+            motor_control_update_target(MOTOR_L_ID,
+                (int32_t)((base_rpm + delta_rpm) * MOTOR_L_SIGN));
+            motor_control_update_target(MOTOR_R_ID,
+                (int32_t)((base_rpm - delta_rpm) * MOTOR_R_SIGN));
+        }
         return;
     }
 
