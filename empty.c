@@ -223,6 +223,26 @@ static void cmd_do(const char *line) {
         return;
     }
 
+    /* ---- 陀螺仪诊断 & 航向锁定 ---- */
+    if (!strcmp(k, "diag")) {
+        UART_Printf(&g_uart0, "YAW=%.2f CORR=%.3f HEAD=%.3f LOCK=%d\r\n",
+            GyroPID_GetLastYawRate(), GyroPID_GetLastCorrection(),
+            GyroPID_GetHeading(), 1);
+        return;
+    }
+    if (sscanf(line, "%*s %f", &v1) >= 1) {
+        if (!strcmp(k, "Gh")) { GyroPID_SetHeadingKp(v1); UART_Printf(&g_uart0, "OK Gh=%.3f\r\n", v1); return; }
+        if (!strcmp(k, "Gi_h")) { GyroPID_SetHeadingKi(v1); UART_Printf(&g_uart0, "OK Gi_h=%.3f\r\n", v1); return; }
+    }
+    if (!strcmp(k, "lock")) {
+        int en;
+        if (sscanf(line, "lock %d", &en) == 1) {
+            GyroPID_EnableHeadingLock((uint8_t)en);
+            UART_Printf(&g_uart0, "OK heading lock %s\r\n", en?"ON":"OFF");
+        } else UART_Puts(&g_uart0, "ERR: lock 1(on) or 0(off)\r\n");
+        return;
+    }
+
     if (!strcmp(k, "st")) {
         if (sscanf(line, "st %f %f", &v1, &v2) == 2) {
             trajectory_straight(v1, v2);
@@ -249,6 +269,13 @@ static void cmd_do(const char *line) {
             trajectory_linefollow(v1);
             UART_Printf(&g_uart0, "OK lf v=%.2f\r\n", v1);
         } else UART_Puts(&g_uart0, "ERR: lf <speed_mps>\r\n");
+        return;
+    }
+    if (!strcmp(k, "rot")) {
+        if (sscanf(line, "rot %f %f %d", &v1, &v2, &dir) == 3) {
+            trajectory_rotate(v1, v2, dir);
+            UART_Printf(&g_uart0, "OK rot th=%.2f v=%.2f d=%d\r\n", v1, v2, dir);
+        } else UART_Puts(&g_uart0, "ERR: rot <theta_rad> <speed> <dir>\r\n");
         return;
     }
 

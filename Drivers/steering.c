@@ -24,6 +24,7 @@ void Steering_Init(void)
 {
     LinePID_Init(0.2f, 0.05f, 0.0f);
     GyroPID_Init(0.5f, 0.02f, 0.0f);
+    GyroPID_EnableHeadingLock(1);                      /* 启用航向锁定 */
     Gyro_Init();
     g_mode       = 0;
     g_lost_count = 0;

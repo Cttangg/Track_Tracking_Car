@@ -28,7 +28,8 @@
 /* ---- 段类型 ---- */
 typedef enum {
     SEG_STRAIGHT = 0,   /* 直线段 */
-    SEG_ARC             /* 圆弧段 */
+    SEG_ARC,            /* 圆弧段 */
+    SEG_ROTATE          /* 原地旋转 (陀螺仪闭环角度) */
 } seg_type_t;
 
 /* ---- 单段定义 ---- */
@@ -65,6 +66,7 @@ int trajectory_arc(float R, float theta, float v_target, int direction);
 int trajectory_circle(float R, float v_target, int direction);   /* loop 圆周 */
 int trajectory_straight(float distance, float v_target);
 int trajectory_linefollow(float v_target);  /* 循迹模式: 指定速度, 闭环循线 */
+int trajectory_rotate(float theta, float v_target, int direction); /* 原地旋转, 陀螺仪闭环 */
 
 void trajectory_stop(void);
 

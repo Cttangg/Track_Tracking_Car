@@ -1,6 +1,7 @@
 #include "trajectory.h"
 #include "motor_control.h"
 #include "line_pid.h"
+#include "gyro_pid.h"
 
 /* ==================== 机器人硬件常量 (需按实车标定) ==================== */
 
@@ -39,6 +40,11 @@ static struct {
     float    ff_v_R;
     uint32_t remaining_ticks;       /* 当前段剩余 10ms tick 数 */
 
+    /* --- 原地旋转 (陀螺仪闭环角度) --- */
+    float    rotate_accum;          /* 已累积的旋转角度 (rad) */
+    float    rotate_target;         /* 目标旋转角度 (rad) */
+    int      rotate_dir;            /* 旋转方向 (±1) */
+
     /* --- 闭环预留 --- */
     uint8_t          closed_loop;   /* 0 = 纯开环, 1 = 叠加反馈 */
     traj_feedback_fn feedback;      /* 循迹反馈回调, 返回修正 (m/s) */
@@ -62,8 +68,20 @@ static void load_segment(uint8_t i)
         float w = (float)s->direction * (v / s->R);
         g_traj.ff_v_L = v - (w * WHEEL_BASE / 2.0f);
         g_traj.ff_v_R = v + (w * WHEEL_BASE / 2.0f);
-        float aw = fabs_f(w);
-        duration = (aw < 1e-6f) ? 0.0f : (s->length / aw);   /* length = theta */
+        g_traj.rotate_accum  = 0.0f;
+        g_traj.rotate_target = s->length;   /* length = theta */
+        g_traj.rotate_dir    = s->direction;
+        g_traj.closed_loop   = 0;           /* 旋转时不走反馈 */
+        duration = 0.0f;                    /* 不用时间, 陀螺仪积分角度停止 */
+    } else if (s->type == SEG_ROTATE) {
+        /* 两轮反向: 左轮后退 右轮前进 = CCW(+1); 左轮前进 右轮后退 = CW(-1) */
+        g_traj.ff_v_L = (float)(-s->direction) * v;
+        g_traj.ff_v_R = (float)( s->direction) * v;
+        g_traj.rotate_accum  = 0.0f;
+        g_traj.rotate_target = s->length;   /* length = 目标弧度 theta */
+        g_traj.rotate_dir    = s->direction;
+        g_traj.closed_loop   = 0;           /* 旋转时不走反馈 */
+        duration = 0.0f;                    /* 不用时间倒计时 */
     } else {                                                 /* SEG_STRAIGHT */
         g_traj.ff_v_L = v;
         g_traj.ff_v_R = v;
@@ -169,6 +187,20 @@ int trajectory_linefollow(float v_target)
     return 0;
 }
 
+int trajectory_rotate(float theta, float v_target, int direction)
+{
+    if (theta <= 0.0f || v_target <= 0.0f ||
+        (direction != 1 && direction != -1))
+        return -1;
+
+    g_single.type      = SEG_ROTATE;
+    g_single.R         = 0.0f;
+    g_single.length    = theta;
+    g_single.v         = v_target;
+    g_single.direction = direction;
+    return trajectory_run_path(&g_single, 1, 0);
+}
+
 void trajectory_stop(void)
 {
     g_traj.status          = TRAJ_IDLE;
@@ -208,6 +240,22 @@ void trajectory_update(void)
     }
 
     apply_speed();      /* 每 tick 下发 (便于闭环叠加修正) */
+
+    /* 圆弧/旋转: 用陀螺仪 yaw_rate 积分角度, 到达目标后停车 */
+    if (g_traj.num_segs > 0 && g_traj.segs &&
+        (g_traj.segs[g_traj.seg_index].type == SEG_ARC ||
+         g_traj.segs[g_traj.seg_index].type == SEG_ROTATE)) {
+
+        float yaw = Gyro_ReadYawRate();
+        g_traj.rotate_accum += fabs_f(yaw) * (3.1415926f / 180.0f) * CTRL_DT;
+
+        if (g_traj.rotate_accum >= g_traj.rotate_target) {
+            motor_control_set_speed(MOTOR_L_ID, 0);
+            motor_control_set_speed(MOTOR_R_ID, 0);
+            g_traj.status = TRAJ_DONE;
+        }
+        return;
+    }
 
     if (g_traj.remaining_ticks > 0)
         g_traj.remaining_ticks--;

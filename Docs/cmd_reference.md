@@ -15,7 +15,7 @@
 
 ---
 
-## 命令速查表（共 27 条）
+## 命令速查表（共 32 条）
 
 ### 状态查询
 
@@ -50,6 +50,7 @@
 | `arc` | `<R_m> <theta_rad> <速度> <方向±1>` | `arc 0.3 3.14 0.1 1` | `trajectory_arc` |
 | `cir` | `<R_m> <速度> <方向±1>` | `cir 0.5 0.1 -1` | `trajectory_circle` |
 | `lf` | `<速度m/s>` | `lf 0.3` | `trajectory_linefollow` (闭环循线, 无限) |
+| `rot` | `<theta_rad> <速度> <方向±1>` | `rot 3.14 0.2 1` | `trajectory_rotate` (原地旋转, 陀螺仪闭环) |
 | `stop_all` | 无 | `stop_all` | `trajectory_stop` (轨迹停车) |
 
 ### 传感器
@@ -58,6 +59,16 @@
 |------|------|------|------|
 | `gs` | 无 | `gs` | `Grayscale_Read` → 打印 `GS=01100000` |
 
+### 陀螺仪
+
+| 命令 | 参数 | 示例 | 函数 |
+|------|------|------|------|
+| `imu` | 无 | `imu` | 打印 Roll/Pitch/Yaw + YawRate |
+| `diag` | 无 | `diag` | 陀螺仪诊断: 当前 yaw_rate / corr / heading |
+| `lock` | `<0\|1>` | `lock 1` | `GyroPID_EnableHeadingLock` (0=速率 1=航向锁定) |
+| `Gh` | `<Kp>` | `Gh 2.0` | `GyroPID_SetHeadingKp` (航向模式 Kp) |
+| `Gi_h` | `<Ki>` | `Gi_h 0.05` | `GyroPID_SetHeadingKi` (航向模式 Ki) |
+
 ### 闭环转向 PID 参数
 
 | 命令 | 参数 | 示例 | 函数 |
@@ -65,9 +76,9 @@
 | `Lp` | `<Kp>` | `Lp 0.4` | `LinePID_SetKp` |
 | `Li` | `<Ki>` | `Li 0.1` | `LinePID_SetKi` |
 | `Ld` | `<Kd>` | `Ld 0.0` | `LinePID_SetKd` |
-| `Gp` | `<Kp>` | `Gp 0.5` | `GyroPID_SetKp` |
-| `Gi` | `<Ki>` | `Gi 0.02` | `GyroPID_SetKi` |
-| `Gd` | `<Kd>` | `Gd 0.0` | `GyroPID_SetKd` |
+| `Gp` | `<Kp>` | `Gp 0.8` | `GyroPID_SetKp` (速率模式 Kp) |
+| `Gi` | `<Ki>` | `Gi 0.05` | `GyroPID_SetKi` (速率模式 Ki) |
+| `Gd` | `<Kd>` | `Gd 0.0` | `GyroPID_SetKd` (速率模式 Kd) |
 | `mode` | `<0\|1>` | `mode 1` | `Steering_SetMode` (0=循线A, 1=陀螺仪B) |
 
 ### 帮助输出 (`?`)
@@ -80,8 +91,9 @@ M2: Tr=xxx RPM=xxx D=xxx F=xxx
 Motor: Tr1|Tr2 <rpm>  Kp1|Kp2 <v>  Ki1|Ki2 <v>  Kd1|Kd2 <v>
        Dd1|Dd2 <dut>  stop1|stop2  Tr <rpm>  Dd <dut>  stop
 Traj:  st <dist> <v>  arc <R> <th> <v> <dir>  cir <R> <v> <dir>
-       stop_all
-Sensor: gs
+       rot <th> <v> <dir>  lf <v>  stop_all
+Sensor: gs  imu
+Gyro:  diag  lock 0|1  Gh|Gi_h <v>
 Steer: Lp|Li|Ld <v>  Gp|Gi|Gd <v>  mode 0|1
 ------------
 ```
@@ -107,11 +119,12 @@ Steer: Lp|Li|Ld <v>  Gp|Gi|Gd <v>  mode 0|1
 1. `?` → 状态 + 帮助
 2. `stop_all` → 轨迹停车
 3. `gs` → 灰度状态
-4. PID 参数 (`Lp/Li/Ld/Gp/Gi/Gd/mode`)
-5. 轨迹 (`st/arc/cir`)
-6. 双电机 (`stop/Tr/Dd` 无后缀)
-7. 单电机 (`Tr1/Tr2/Kp1/Kp2/...` 末尾数字提取 motorID)
-8. 无匹配 → 错误
+4. `imu` / `diag` → 陀螺仪诊断
+5. PID 参数 (`Lp/Li/Ld/Gp/Gi/Gd/Gh/Gi_h/mode/lock`)
+6. 轨迹 (`st/arc/cir/lf/rot`)
+7. 双电机 (`stop/Tr/Dd` 无后缀)
+8. 单电机 (`Tr1/Tr2/Kp1/Kp2/...` 末尾数字提取 motorID)
+9. 无匹配 → 错误
 
 ---
 
@@ -122,10 +135,30 @@ Steer: Lp|Li|Ld <v>  Gp|Gi|Gd <v>  mode 0|1
 st 1.0 0.1              → 前进 1m @ 0.1m/s, 到站自动停
 ```
 
+### 陀螺仪直线校准
+```
+mode 1                  → 强制切陀螺仪模式
+lock 0                  → 先关航向锁定 (纯速率 PID)
+st 1.0 0.2              → 直行 1m @ 0.2m/s, 观察偏航
+diag                    → 查看 YAW / CORR / HEAD
+Gp 0.8                  → 增大速率 P, 压住 yaw rate
+Gi 0.05                 → 加 I 消除静差
+lock 1                  → 开航向锁定
+Gh 2.0                  → 设航向 Kp
+Gi_h 0.05               → 设航向 Ki
+st 2.0 0.2              → 更长距离验证偏航是否纠正
+```
+
 ### 圆弧转弯
 ```
 arc 0.3 3.14 0.1 1      → 半径 0.3m 半圆左转
 arc 0.3 3.14 0.1 -1     → 半径 0.3m 半圆右转
+```
+
+### 原地旋转
+```
+rot 3.14 0.2 1           → CCW 半圈 (π rad) @ 0.2m/s, 陀螺仪闭环
+rot 1.57 0.2 -1          → CW 90° @ 0.2m/s
 ```
 
 ### 闭环循迹调参
