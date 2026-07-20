@@ -13,16 +13,137 @@
 #include "./Drivers/line_pid.h"
 #include "./Drivers/gyro_pid.h"
 #include "./Drivers/uart.h"
+#include "./Drivers/mpu6500.h"
+#include "./Drivers/filter.h"
 #include "stdio.h"
 #include <string.h>
+#include <math.h>
 
 #define CMD_BUF_SIZE      64
+#define SAMPLE_DT         0.01f           // 维持 10ms (100Hz) 高频采样解算
+#define YAW_RESET_INTERVAL_CYCLES  3000   // 30 秒评估周期（30秒 / 0.01秒 = 3000帧）
+#define STATIONARY_THRESHOLD_CYCLES 300   // 绝对静止判定阈值（3秒 = 300帧）
+
+/* ------------------------------------------------------------------
+ * 封装姿态数据结构体
+ * ------------------------------------------------------------------ */
+typedef struct {
+    float roll;  // X 轴角度
+    float pitch; // Y 轴角度
+    float yaw;   // Z 轴角度（小车转向角）
+} IMU_Attitude;
+
+// 全局姿态变量
+volatile IMU_Attitude g_myCarAngle = {0.0f, 0.0f, 0.0f};
+volatile bool g_is_calibrated = false;      // 校准完成标志位
+
+// 全局 yaw rate 供 gyro_pid 模块读取 (单位: °/s)
+volatile float g_yaw_rate = 0.0f;
+
+// 定时器同步标志位
+static volatile int g_imu_ready = 0;
+
+// 声明全局滤波器实例与 Z 轴积分变量
+BiquadFilter xFilter, yFilter;
+KalmanFilter2D kfX, kfY;
+float raw_angle_z = 0.0f;
+
+// Z 轴陀螺仪静态零偏存储变量
+float gyro_z_offset = 0.0f;
+
+/* ==================================================================
+ * 动态漂移补偿全套变量组
+ * ================================================================== */
+float yaw_drift_rate = 0.0f;           // 实时估计出的动态漂移率（度/秒）
+uint32_t total_cycles_since_reset = 0; // 自上次重置以来走过的总帧数
+uint32_t stationary_cycles = 0;        // 连续静止的帧数计数器
+
+/* ------------------------------------------------------------------
+ * mpu6500功能函数
+ * ------------------------------------------------------------------ */
+bool IMU_UpdateAttitude(volatile IMU_Attitude *attitude) {
+    MPU6500_IMUData imuData;
+
+    // 读取 6 轴全数据
+    if (!MPU6500_ReadIMU(&imuData)) {
+        return false;
+    }
+
+    // ---- 【X/Y 轴姿态解算】 ----
+    float accAngleX = atan2f(imuData.accel_y, imuData.accel_z) * 57.29578f;
+    float accAngleY = atan2f(-imuData.accel_x, sqrtf(imuData.accel_y * imuData.accel_y + imuData.accel_z * imuData.accel_z)) * 57.29578f;
+
+    float lowpassAccX = Biquad_Process(&xFilter, accAngleX);
+    float lowpassAccY = Biquad_Process(&yFilter, accAngleY);
+
+    Kalman2D_Predict(&kfX);
+    Kalman2D_Predict(&kfY);
+    Kalman2D_Update(&kfX, lowpassAccX, imuData.gyro_x);
+    Kalman2D_Update(&kfY, lowpassAccY, imuData.gyro_y);
+
+    attitude->roll  = kfX.x[0];
+    attitude->pitch = kfY.x[0];
+
+    // ---- 【Z 轴航向角解算 - 融合漂移补偿】 ----
+
+    // 1. 基础校准：减去开机测得的静态零偏
+    float corrected_gyro_z = imuData.gyro_z - gyro_z_offset;
+
+    // 2. 智能化静止状态检测
+    bool is_stationary = (fabsf(imuData.gyro_x) < 1.5f) &&
+                         (fabsf(imuData.gyro_y) < 1.5f) &&
+                         (fabsf(corrected_gyro_z) < 1.5f);
+
+    total_cycles_since_reset++; // 周期总计数递增
+
+    if (is_stationary) {
+        stationary_cycles++; // 静止计时递增
+
+        if (total_cycles_since_reset >= YAW_RESET_INTERVAL_CYCLES &&
+            stationary_cycles >= STATIONARY_THRESHOLD_CYCLES) {
+
+            float elapsed_time = total_cycles_since_reset * SAMPLE_DT;
+            yaw_drift_rate = raw_angle_z / elapsed_time;
+
+            if (fabsf(yaw_drift_rate) < 0.1f) {
+                raw_angle_z = 0.0f; // 强制洗白重置当前偏航角
+                total_cycles_since_reset = 0;
+                stationary_cycles = 0;
+            }
+        }
+    } else {
+        stationary_cycles = 0;
+    }
+
+    // 3. 实时扣除估计出来的动态温漂率
+    float final_gyro_z_rate = corrected_gyro_z - yaw_drift_rate;
+
+    // 4. 死区拦截：过滤极其微小的瞬时残余白噪声
+    if (fabsf(final_gyro_z_rate) < 0.3f) {
+        final_gyro_z_rate = 0.0f;
+    }
+
+    // 将当前的 Z 轴角速率暴露给 gyro_pid 模块 (单位: °/s)
+    g_yaw_rate = final_gyro_z_rate;
+
+    // 5. 高频无延迟积分 (严格 100Hz 对应 SAMPLE_DT = 0.01f)
+    raw_angle_z += final_gyro_z_rate * SAMPLE_DT;
+
+    // 6. 角度归一化范围限制 (-180 ~ +180度)
+    while (raw_angle_z >= 180.0f) raw_angle_z -= 360.0f;
+    while (raw_angle_z < -180.0f) raw_angle_z += 360.0f;
+
+    attitude->yaw = raw_angle_z;
+
+    return true;
+}
 
 /* ==================== UART ==================== */
 
 static void firewater_send(void) {
-    static char b[96];
-    int n = sprintf(b, "%d,%d,%d,%d,%d,%d,%d,%d,",
+    static char b[160];
+    
+    int n = sprintf(b, "%d,%d,%d,%d,%d,%d,%d,%d,%.2f,%.2f,%.2f,",
         (int)motor_control_get_target_rpm(1),
         (int)motor_control_get_actual_rpm(1),
         (int)motor_control_get_duty(1),
@@ -30,7 +151,11 @@ static void firewater_send(void) {
         (int)motor_control_get_target_rpm(2),
         (int)motor_control_get_actual_rpm(2),
         (int)motor_control_get_duty(2),
-        (int)motor_control_get_freq(2));
+        (int)motor_control_get_freq(2),
+        g_myCarAngle.roll,
+        g_myCarAngle.pitch,
+        g_myCarAngle.yaw);
+        
     if (n > 0) UART_Puts(&g_uart0, b);
 
     uint8_t sensor = Grayscale_Read();
@@ -66,13 +191,18 @@ static void cmd_do(const char *line) {
     if (line[0] == '\0') return;
     sscanf(line, "%15s", k);
 
-    if (!strcmp(k, "?"))      { cmd_show(); return; }
+    if (!strcmp(k, "?"))        { cmd_show(); return; }
     if (!strcmp(k, "stop_all")) { trajectory_stop(); UART_Puts(&g_uart0, "OK all stopped\r\n"); return; }
     if (!strcmp(k, "gs")) {
         uint8_t s = Grayscale_Read(); char b[9];
         for (int i = 7; i >= 0; i--) b[7 - i] = (s & (1 << i)) ? '1' : '0';
         b[8] = '\0';
         UART_Printf(&g_uart0, "GS=%s\r\n", b);
+        return;
+    }
+    if (!strcmp(k, "imu")) {
+        UART_Printf(&g_uart0, "Roll: %.2f deg, Pitch: %.2f deg, Yaw: %.2f deg, YawRate: %.2f deg/s\r\n",
+            g_myCarAngle.roll, g_myCarAngle.pitch, g_myCarAngle.yaw, g_yaw_rate);
         return;
     }
 
@@ -188,7 +318,7 @@ static void cmd_poll(void) {
     }
 }
 
-/* ==================== TIMG12 ISR ==================== */
+/* ==================== TIMG12 ISR (100Hz / 10ms) ==================== */
 
 static volatile int g_fw_ready = 0;
 static volatile int g_fw_div    = 0;
@@ -197,6 +327,10 @@ void TIMER_0_INST_IRQHandler(void)
 {
     motor_control_update();
     trajectory_update();
+
+    // 【修改点】：在 10ms 定时器中断里置位 IMU 更新标志
+    g_imu_ready = 1;
+
     if (++g_fw_div >= 5) { g_fw_div = 0; g_fw_ready = 1; }
     DL_TimerG_clearInterruptStatus(TIMER_0_INST, DL_TIMERG_INTERRUPT_ZERO_EVENT);
 }
@@ -210,6 +344,18 @@ int main(void)
     delay_cycles(CPUCLK_FREQ * 1);
     UART_RxEnable();
 
+    // ---- IMU 相关：使能 I2C 中断、禁用休眠 ----
+    NVIC_SetPriority(I2C_GYRO_INST_INT_IRQN, 0);
+    NVIC_EnableIRQ(I2C_GYRO_INST_INT_IRQN);
+    DL_SYSCTL_disableSleepOnExit();
+
+    // ---- 滤波器初始化 ----
+    Biquad_Init(&xFilter, 0.0133592f, 0.0267184f, 0.0133592f, 1.0f, -1.64745998f, 0.70089678f);
+    Biquad_Init(&yFilter, 0.0133592f, 0.0267184f, 0.0133592f, 1.0f, -1.64745998f, 0.70089678f);
+    Kalman2D_Init(&kfX, SAMPLE_DT);
+    Kalman2D_Init(&kfY, SAMPLE_DT);
+
+    // ---- 电机初始化 ----
     motor_control_init(1, 0.01f, 2.0f, 10.0f, 0.0f);
     motor_control_init(2, 0.01f, 2.0f, 10.0f, 0.0f);
 
@@ -221,10 +367,46 @@ int main(void)
     trajectory_set_feedback(Steering_GetCorrection);
     trajectory_enable_closed_loop(1);
 
+    // ---- MPU6500 硬件校准 ----
+    if (MPU6500_Init()) {
+        UART_Puts(&g_uart0, "MPU6500 Init OK! Calibrating Z-Gyro, KEEP STILL...\r\n");
+
+        float gyro_z_sum = 0.0f;
+        int valid_samples = 0;
+
+        while (valid_samples < 200) {
+            MPU6500_IMUData calData;
+            if (MPU6500_ReadIMU(&calData)) {
+                gyro_z_sum += calData.gyro_z;
+                valid_samples++;
+            }
+            delay_cycles(320000); // 约 10ms 间隔采样
+        }
+        gyro_z_offset = gyro_z_sum / 200.0f;
+
+        UART_Printf(&g_uart0, "Calibration Done! Offset: %.4f °/s. System Ready!\r\n", gyro_z_offset);
+
+        // 允许姿态解算
+        g_is_calibrated = true;
+    } else {
+        UART_Puts(&g_uart0, "MPU6500 Initialize FAILED!\r\n");
+    }
+
     UART_Puts(&g_uart0, "Dual Motor Control Ready\r\n");
     cmd_show();
+
     while (1) {
         cmd_poll();
-        if (g_fw_ready) { g_fw_ready = 0; firewater_send(); }
+
+        // 【修改点】：精准控制为每 10ms (100Hz) 仅解算一次姿态
+        if (g_is_calibrated && g_imu_ready) {
+            g_imu_ready = 0;
+            IMU_UpdateAttitude(&g_myCarAngle);
+        }
+
+        if (g_fw_ready) {
+            g_fw_ready = 0;
+            firewater_send();
+        }
     }
 }

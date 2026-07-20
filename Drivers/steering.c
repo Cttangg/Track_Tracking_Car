@@ -22,7 +22,7 @@ static uint32_t g_lost_count  = 0;
 
 void Steering_Init(void)
 {
-    LinePID_Init(0.3f, 0.05f, 0.0f);
+    LinePID_Init(0.2f, 0.05f, 0.0f);
     GyroPID_Init(0.5f, 0.02f, 0.0f);
     Gyro_Init();
     g_mode       = 0;

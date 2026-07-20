@@ -15,6 +15,8 @@
 #define MAX_CORR  0.15f      /* 转向修正上限 m/s */
 #define MAX_INTEG 0.30f      /* 积分限幅 */
 
+static float g_last_abs_error = 0.0f;
+
 static struct {
     float Kp, Ki, Kd, dt;
     float integral, prev_error;
@@ -61,6 +63,7 @@ float LinePID_Update(uint8_t sensor)
     if (!g_pid.init) return 0.0f;
 
     float error = calc_error(sensor);
+    g_last_abs_error = (error < 0.0f) ? -error : error;   /* 存 |error| 供速度调制 */
 
     g_pid.integral += error * g_pid.dt;
     if (g_pid.integral >  MAX_INTEG) g_pid.integral =  MAX_INTEG;
@@ -79,6 +82,11 @@ float LinePID_Update(uint8_t sensor)
     if (corr < -MAX_CORR) corr = -MAX_CORR;
 
     return corr;
+}
+
+float LinePID_GetAbsError(void)
+{
+    return g_last_abs_error;
 }
 
 uint8_t LinePID_LineDetected(void)

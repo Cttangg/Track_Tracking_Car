@@ -17,6 +17,7 @@ void    LinePID_SetKi(float ki);
 void    LinePID_SetKd(float kd);
 void    LinePID_Reset(void);                          /* 清积分, 切换模式时用 */
 float   LinePID_Update(uint8_t sensor);               /* 返回 转向修正 m/s */
+float   LinePID_GetAbsError(void);                    /* 返回最近一次 |error| (0~3.5) */
 uint8_t LinePID_LineDetected(void);                   /* 是否有黑线 (任意 bit=1) */
 
 #endif
