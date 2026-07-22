@@ -279,6 +279,27 @@ static void cmd_do(const char *line) {
         return;
     }
 
+    if (!strcmp(k, "mix1")) { trajectory_mix1(); UART_Puts(&g_uart0, "OK mix1 started\r\n"); return; }
+
+    if (!strcmp(k, "st_open")) {
+        if (sscanf(line, "st_open %f %f", &v1, &v2) == 2) {
+            trajectory_straight_openloop(v1, v2);
+            UART_Printf(&g_uart0, "OK openloop d=%.2f v=%.2f\r\n", v1, v2);
+        } else UART_Puts(&g_uart0, "ERR: st_open <dist> <speed>\r\n");
+        return;
+    }
+    if (!strcmp(k, "odrift")) {
+        if (sscanf(line, "odrift %f", &v1) == 1) {
+            GyroPID_SetDriftOffset(v1);
+            UART_Printf(&g_uart0, "OK drift offset=%.2f\r\n", v1);
+        } else UART_Puts(&g_uart0, "ERR: odrift <value_deg_s>\r\n");
+        return;
+    }
+    if (!strcmp(k, "drift")) {
+        UART_Printf(&g_uart0, "DRIFT=%.2f °/s\r\n", GyroPID_GetDriftOffset());
+        return;
+    }
+
     if (!strcmp(k, "stop")) {
         motor_control_stop(1); motor_control_stop(2);
         UART_Puts(&g_uart0, "OK both stopped\r\n"); return;
@@ -369,7 +390,7 @@ int main(void)
     SYSCFG_DL_init();
     UART_Init();
     delay_cycles(CPUCLK_FREQ * 1);
-    UART_RxEnable();
+    UART_RxEnable(&g_uart0);
 
     // ---- IMU 相关：使能 I2C 中断、禁用休眠 ----
     NVIC_SetPriority(I2C_GYRO_INST_INT_IRQN, 0);

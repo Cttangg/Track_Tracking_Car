@@ -2,13 +2,14 @@
 #include "motor_control.h"
 #include "line_pid.h"
 #include "gyro_pid.h"
+#include "grayscale.h"
 
 /* ==================== 机器人硬件常量 (需按实车标定) ==================== */
 
 #define WHEEL_BASE     0.14f     /* 左右轮距 L (m) */
 #define WHEEL_RADIUS   0.024f    /* 轮子半径 (m), 直径 0.048m */
 #define GEAR_RATIO     20.0f     /* 减速比 1:20, 电机轴 = 输出轴 × 20 */
-#define CTRL_DT        0.01f     /* 控制周期 (s), 由 TIMG12 10ms ISR 保证 */
+#define CTRL_DT        0.02f     /* 控制周期 (s), 实际 BUSCLK=40MHz → TIMG12=20ms */
 
 #define PI_F           3.1415926f
 
@@ -44,6 +45,10 @@ static struct {
     float    rotate_accum;          /* 已累积的旋转角度 (rad) */
     float    rotate_target;         /* 目标旋转角度 (rad) */
     int      rotate_dir;            /* 旋转方向 (±1) */
+
+    /* --- 混合路径: 线检测消抖 + rot 补角 --- */
+    uint8_t  line_lost_count;       /* 连续无线计数 (消抖用) */
+    uint8_t  line_lost_triggered;   /* 已触发 rot 补角标志 */
 
     /* --- 闭环预留 --- */
     uint8_t          closed_loop;   /* 0 = 纯开环, 1 = 叠加反馈 */
@@ -94,12 +99,23 @@ static void load_segment(uint8_t i)
     g_traj.seg_index = i;
 }
 
-/* 每 tick 下发轮速: 前馈 + (预留)闭环修正 */
+/* 每 tick 下发轮速: 按 use_line 选择反馈源 */
 static void apply_speed(void)
 {
     float corr = 0.0f;
-    if (g_traj.closed_loop && g_traj.feedback)
+
+    if (g_traj.num_segs > 0 && g_traj.segs) {
+        const traj_segment_t *seg = &g_traj.segs[g_traj.seg_index];
+        if (seg->use_line && Grayscale_Read() != 0) {
+            corr = LinePID_Update(Grayscale_Read());   /* 循线 */
+        } else if (!seg->use_line && !seg->gyro_stop) {
+            corr = 0.0f;                               /* 开环 */
+        } else if (g_traj.closed_loop && g_traj.feedback) {
+            corr = g_traj.feedback();                  /* 陀螺仪 */
+        }
+    } else if (g_traj.closed_loop && g_traj.feedback) {
         corr = g_traj.feedback();
+    }
 
     float v_L = g_traj.ff_v_L + corr;
     float v_R = g_traj.ff_v_R - corr;
@@ -119,7 +135,8 @@ int trajectory_run_path(const traj_segment_t *segs, uint8_t num, uint8_t loop)
     g_traj.segs     = segs;
     g_traj.num_segs = num;
     g_traj.loop     = loop ? 1 : 0;
-
+    g_traj.line_lost_count    = 0;
+    g_traj.line_lost_triggered = 0;
     load_segment(0);
     g_traj.status = TRAJ_RUNNING;
     return 0;
@@ -167,6 +184,20 @@ int trajectory_straight(float distance, float v_target)
     return trajectory_run_path(&g_single, 1, 0);
 }
 
+int trajectory_straight_openloop(float distance, float v_target)
+{
+    if (distance <= 0.0f || v_target <= 0.0f) return -1;
+
+    g_single.type       = SEG_STRAIGHT;
+    g_single.R          = 0.0f;
+    g_single.length     = distance;
+    g_single.v          = v_target;
+    g_single.direction  = 1;
+    g_single.use_line   = 0;
+    g_single.gyro_stop  = 0;
+    return trajectory_run_path(&g_single, 1, 0);
+}
+
 int trajectory_linefollow(float v_target)
 {
     if (v_target <= 0.0f) return -1;
@@ -199,6 +230,19 @@ int trajectory_rotate(float theta, float v_target, int direction)
     g_single.v         = v_target;
     g_single.direction = direction;
     return trajectory_run_path(&g_single, 1, 0);
+}
+
+int trajectory_mix1(void)
+{
+    static const traj_segment_t segs[] = {
+        /* type,   R,    length, v,    dir, use_line, gyro_stop */
+        { SEG_STRAIGHT, 0,   1.0f,  0.2f, 0,  0, 0 },  /* 开环直行 */
+        { SEG_ARC,      0.4f, 3.14f, 0.15f,-1, 1, 1 },  /* 黑线半圆 CW */
+        { SEG_STRAIGHT, 0,   1.0f,  0.2f, 0,  0, 0 },  /* 开环直行 */
+        { SEG_ARC,      0.4f, 3.14f, 0.15f,-1, 1, 1 },  /* 黑线半圆 CW */
+    };
+    return trajectory_run_path(segs,
+        sizeof(segs) / sizeof(segs[0]), 0);
 }
 
 void trajectory_stop(void)
@@ -246,13 +290,39 @@ void trajectory_update(void)
         (g_traj.segs[g_traj.seg_index].type == SEG_ARC ||
          g_traj.segs[g_traj.seg_index].type == SEG_ROTATE)) {
 
+        const traj_segment_t *seg = &g_traj.segs[g_traj.seg_index];
         float yaw = Gyro_ReadYawRate();
         g_traj.rotate_accum += fabs_f(yaw) * (3.1415926f / 180.0f) * CTRL_DT;
 
+        /* 黑线循迹弧段: 检测线丢失 → rot 补角 */
+        if (seg->type == SEG_ARC && seg->use_line && !g_traj.line_lost_triggered) {
+            if (Grayscale_Read() == 0) {
+                g_traj.line_lost_count++;
+                if (g_traj.line_lost_count >= 10) {  /* 100ms 消抖 */
+                    float remaining = seg->length - g_traj.rotate_accum;
+                    if (remaining > 0.05f) {
+                        motor_control_set_speed(MOTOR_L_ID, 0);
+                        motor_control_set_speed(MOTOR_R_ID, 0);
+                        g_traj.line_lost_triggered = 1;
+                        trajectory_rotate(remaining, 0.05f, seg->direction);
+                        return;
+                    }
+                }
+            } else {
+                g_traj.line_lost_count = 0;
+            }
+        }
+
+        /* 角度到达 → 停车/切段 */
         if (g_traj.rotate_accum >= g_traj.rotate_target) {
-            motor_control_set_speed(MOTOR_L_ID, 0);
-            motor_control_set_speed(MOTOR_R_ID, 0);
-            g_traj.status = TRAJ_DONE;
+            uint8_t next = (uint8_t)(g_traj.seg_index + 1);
+            if (next >= g_traj.num_segs) {
+                motor_control_set_speed(MOTOR_L_ID, 0);
+                motor_control_set_speed(MOTOR_R_ID, 0);
+                g_traj.status = TRAJ_DONE;
+            } else {
+                load_segment(next);
+            }
         }
         return;
     }

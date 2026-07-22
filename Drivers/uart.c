@@ -1,32 +1,37 @@
 #include "uart.h"
+#include <assert.h>
 
 /* ============================================================
- * 通用 UART 库实现
+ * 通用 UART 库 v2 实现
  * ------------------------------------------------------------
- * 传输层 (本文件): 收发字节、双环形缓冲、ISR 分发、错误统计。
- * 协议层: 由 framer 插件实现 (定长/分隔符/自定义), 与传输层解耦。
+ * 架构:
+ *   ISR 层: 纯数据搬运
+ *     RX: 硬件FIFO → ring_push()
+ *     TX: ring_pop() → 硬件FIFO
+ *   主循环:
+ *     RX: UART_Read*() 从 ring 消费
+ *     TX: UART_Write*() 入 ring → kick + ISR 搬运
+ *   Framer: UART_FramerPoll() 在主循环中轮询
  *
- * 数据流:
- *   RX: 硬件FIFO -> ISR -> [挂了 framer ? 喂 framer : 入 rx 环形缓冲]
- *                                                    -> 主循环 UART_Read*
- *   TX: 主循环 UART_Write -> tx 环形缓冲 -> (使能TX中断) -> ISR -> 硬件FIFO
- *
- * 并发模型 (单核, ISR 不可被主循环打断):
- *   rx 环形: 生产者=ISR, 消费者=主循环   (ISR 写 head, 主读 tail)
- *   tx 环形: 生产者=主循环, 消费者=ISR   (主写 head, ISR 读 tail)
- *   head/tail 声明为 volatile; 各自单写者, 故无需临界区。
+ * TX Kick 机制:
+ *   MSPM0 TX 中断为边沿触发 (FIFO 满→非满)。
+ *   ISR 排空环形后关 TX 中断, FIFO 随后排空。
+ *   主循环下次入队 → enableInterrupt 时无新边沿 → ISR 不触发。
+ *   tx_byte() 入队后额外直写 FIFO 一个字节,
+ *   人为制造填→排空边沿以启动 ISR 传输链。
+ *   这是 MSPM0 平台的最小必要例外。
  * ============================================================ */
 
-/* ==================== 环形缓冲 (SPSC, 2 的幂容量) ==================== */
-/* 容量强制 2 的幂: mask = size-1, 索引自增用位与取模, ISR 内无除法。
- * 满判定牺牲 1 个槽位 (next==tail 即满), 故可用容量 = size-1。 */
+/* ==================== 环形缓冲 ==================== */
+/* 强制 2 的幂容量, 满判定牺牲 1 槽位 */
 
 static void ring_init(UART_Ring *r, uint8_t *buf, uint16_t size)
 {
-    r->buf  = buf;
-    r->mask = (uint16_t)(size - 1);   /* size 必须为 2 的幂 */
-    r->head = 0;
-    r->tail = 0;
+    assert(size > 0 && (size & (size - 1)) == 0);  /* 必须为 2 的幂 */
+    r->buf      = buf;
+    r->mask     = (uint16_t)(size - 1);
+    r->head     = 0;
+    r->tail     = 0;
 }
 
 static inline uint16_t ring_count(const UART_Ring *r)
@@ -34,7 +39,11 @@ static inline uint16_t ring_count(const UART_Ring *r)
     return (uint16_t)((r->head - r->tail) & r->mask);
 }
 
-/* 生产者调用: 成功 1, 满 0 */
+static inline uint16_t ring_free(const UART_Ring *r)
+{
+    return (uint16_t)(r->mask - ring_count(r));
+}
+
 static inline int ring_push(UART_Ring *r, uint8_t b)
 {
     uint16_t next = (uint16_t)((r->head + 1) & r->mask);
@@ -44,7 +53,6 @@ static inline int ring_push(UART_Ring *r, uint8_t b)
     return 1;
 }
 
-/* 消费者调用: 成功 1, 空 0 */
 static inline int ring_pop(UART_Ring *r, uint8_t *b)
 {
     if (r->head == r->tail) return 0;
@@ -69,9 +77,10 @@ static void port_setup(UART_Port *p, UART_Regs *inst, IRQn_Type irqn,
                        uint8_t *rxbuf, uint16_t rxsize,
                        uint8_t *txbuf, uint16_t txsize)
 {
-    p->inst   = inst;
-    p->irqn   = irqn;
-    p->framer = 0;
+    p->inst       = inst;
+    p->irqn       = irqn;
+    p->framer     = 0;
+    p->tx_int_en  = 0;
     p->err.rx_overflow = 0;
     p->err.hw_overrun  = 0;
     p->err.framing     = 0;
@@ -79,8 +88,12 @@ static void port_setup(UART_Port *p, UART_Regs *inst, IRQn_Type irqn,
     ring_init(&p->rx, rxbuf, rxsize);
     ring_init(&p->tx, txbuf, txsize);
 
-    /* TX 为阻塞直发, 无需中断; RX 中断延后由 UART_RxEnable() 手动开,
-     * 避免 PA11 浮空噪声在上电瞬间灌爆环形缓冲。 */
+    /* 防御: 确保外设级 RX/TX 中断初始关闭, 避免 SysConfig 预设干扰 */
+    DL_UART_Main_disableInterrupt(inst,
+        DL_UART_MAIN_INTERRUPT_RX | DL_UART_MAIN_INTERRUPT_TX);
+
+    NVIC_ClearPendingIRQ(irqn);
+    NVIC_EnableIRQ(irqn);
 }
 
 void UART_Init(void)
@@ -93,41 +106,79 @@ void UART_Init(void)
 #endif
 }
 
-/* 使能 RX 中断 (在硬件稳定后调用, 避免上电噪声灌入) */
-void UART_RxEnable(void)
-{
-    /* 先清空硬件 RX FIFO 和软件环形缓冲中的上电残留 */
-    while (!DL_UART_isRXFIFOEmpty(UART_0_INST))
-        DL_UART_Main_receiveData(UART_0_INST);
-    UART_RxFlush(&g_uart0);
+/* ==================== RX 中断控制 (参数化端口) ==================== */
 
-    DL_UART_Main_enableInterrupt(UART_0_INST, DL_UART_MAIN_INTERRUPT_RX);
-    NVIC_ClearPendingIRQ(UART_0_INST_INT_IRQN);
-    NVIC_EnableIRQ(UART_0_INST_INT_IRQN);
+void UART_RxEnable(UART_Port *port)
+{
+    while (!DL_UART_isRXFIFOEmpty(port->inst))
+        DL_UART_Main_receiveData(port->inst);
+    UART_RxFlush(port);
+
+    DL_UART_Main_enableInterrupt(port->inst, DL_UART_MAIN_INTERRUPT_RX);
+    NVIC_ClearPendingIRQ(port->irqn);
+    if (!(NVIC->ISER[(uint32_t)port->irqn >> 5] & (1U << ((uint32_t)port->irqn & 0x1F))))
+        NVIC_EnableIRQ(port->irqn);
 }
 
-/* 关闭 RX 中断 (回退到纯 TX 模式) */
-void UART_RxDisable(void)
+void UART_RxDisable(UART_Port *port)
 {
-    NVIC_DisableIRQ(UART_0_INST_INT_IRQN);
-    DL_UART_Main_disableInterrupt(UART_0_INST, DL_UART_MAIN_INTERRUPT_RX);
-    UART_RxFlush(&g_uart0);
-    while (!DL_UART_isRXFIFOEmpty(UART_0_INST))
-        DL_UART_Main_receiveData(UART_0_INST);
+    DL_UART_Main_disableInterrupt(port->inst, DL_UART_MAIN_INTERRUPT_RX);
+    UART_RxFlush(port);
+    while (!DL_UART_isRXFIFOEmpty(port->inst))
+        DL_UART_Main_receiveData(port->inst);
 }
 
-/* ==================== 发送 (阻塞直发) ====================
- * TX 采用阻塞直写 FIFO (与原工程可用写法一致), 不用 TX 中断/环形缓冲,
- * 以规避中断驱动 TX 的时序问题。RX 仍为中断 + 环形缓冲。 */
+/* ==================== 发送 (纯 ISR 搬运, 主循环不碰 FIFO) ==================== */
 
-/* 阻塞发送单字节: 等 TX FIFO 有空位再写入 */
+/*
+ * TX Kick 机制说明:
+ * ───────────────────────────────────────────────
+ * MSPM0 UART TX 中断是边沿触发: FIFO 从"满"下降到"阈值以下"才产生中断边沿。
+ * 当 ISR 排空环形后关闭 TX 中断, 此时 FIFO 也排空移位完毕。
+ * 下次主循环入队 → enableInterrupt(TX) 时, FIFO 已经是空的状态,
+ * 条件始终为真, 不产生边沿 → ISR 永远不触发。
+ *
+ * 尝试过的替代方案:
+ *   - NVIC_SetPendingIRQ: 强制 pend ISR, 但 ISR 内读 IIDX 得不到 TX 中断标志,
+ *     因为外设 MIS 虽然置位, 但电平已经稳定, 无新边沿传入 NVIC。
+ *   - 永不关闭 TX 中断: 环形空时 ISR 空转不操作, 但同样存在边沿丢失问题。
+ *
+ * 结论: 必须通过"填充 FIFO → 等待移位排空"来人工制造满→空边沿。
+ * 因此 tx_byte() 入队后额外直写 FIFO 一个字节 (即 Kick)。
+ * Kick 由主循环执行, 是 MSPM0 平台特性导致的最小必要例外。
+ *
+ * 数据路径:
+ *   主循环: ring_push → enableInterrupt(TX) → Kick(直写FIFO)
+ *   ISR:    ring_pop → transmitData → ring空 → disableInterrupt(TX)
+ * ───────────────────────────────────────────────
+ */
+
+static inline void tx_kick_fifo(UART_Port *p)
+{
+    if (!DL_UART_isTXFIFOFull(p->inst)) {
+        uint8_t b;
+        if (ring_pop(&p->tx, &b))
+            DL_UART_Main_transmitData(p->inst, b);
+    }
+}
+
 static inline void tx_byte(UART_Port *p, uint8_t b)
 {
-    while (DL_UART_isTXFIFOFull(p->inst)) { }
-    DL_UART_Main_transmitData(p->inst, b);
+    while (!ring_push(&p->tx, b)) {
+        /* 环形满, 触发 ISR 消费 */
+        if (!p->tx_int_en) {
+            p->tx_int_en = 1;
+            DL_UART_Main_enableInterrupt(p->inst, DL_UART_MAIN_INTERRUPT_TX);
+        }
+    }
+    /* 入队成功, 开启中断 + kick 启动传输链 */
+    if (!p->tx_int_en) {
+        p->tx_int_en = 1;
+        DL_UART_Main_enableInterrupt(p->inst, DL_UART_MAIN_INTERRUPT_TX);
+    }
+    tx_kick_fifo(p);
 }
 
-/* 发送 len 字节, 返回发送字节数 */
 uint16_t UART_Write(UART_Port *port, const uint8_t *data, uint16_t len)
 {
     for (uint16_t i = 0; i < len; i++)
@@ -135,14 +186,12 @@ uint16_t UART_Write(UART_Port *port, const uint8_t *data, uint16_t len)
     return len;
 }
 
-/* 发送单字节, 返回 1 */
 int UART_WriteByte(UART_Port *port, uint8_t b)
 {
     tx_byte(port, b);
     return 1;
 }
 
-/* 发送以 '\0' 结尾的字符串, 返回发送字节数 */
 int UART_Puts(UART_Port *port, const char *s)
 {
     uint16_t len = 0;
@@ -154,7 +203,7 @@ int UART_Puts(UART_Port *port, const char *s)
 
 typedef struct {
     UART_Port *port;
-    int        count;      /* 已发送字节数 */
+    int        count;
 } fmt_ctx;
 
 static inline void emit_c(fmt_ctx *c, char ch)
@@ -163,10 +212,9 @@ static inline void emit_c(fmt_ctx *c, char ch)
     c->count++;
 }
 
-/* 无符号整数按 base 输出 (upper: 十六进制大写) */
 static void emit_uint(fmt_ctx *c, unsigned long v, unsigned base, int upper)
 {
-    char tmp[11];               /* 32 位十进制最多 10 位 */
+    char tmp[11];
     int  i = 0;
     const char *dig = upper ? "0123456789ABCDEF" : "0123456789abcdef";
     if (v == 0) tmp[i++] = '0';
@@ -174,35 +222,29 @@ static void emit_uint(fmt_ctx *c, unsigned long v, unsigned base, int upper)
     while (i) emit_c(c, tmp[--i]);
 }
 
-/* 有符号整数 */
 static void emit_int(fmt_ctx *c, long v, unsigned base, int upper)
 {
     if (v < 0) { emit_c(c, '-'); emit_uint(c, (unsigned long)(-v), base, upper); }
     else       { emit_uint(c, (unsigned long)v, base, upper); }
 }
 
-/* 字符串 */
 static void emit_str(fmt_ctx *c, const char *s)
 {
     if (!s) s = "(null)";
     while (*s) emit_c(c, *s++);
 }
 
-/* 浮点: 手写转换, 不依赖 TI 库的浮点 printf; prec<0 用默认 6 位小数 */
 static void emit_float(fmt_ctx *c, double v, int prec)
 {
     if (prec < 0) prec = 6;
-
     if (v < 0) { emit_c(c, '-'); v = -v; }
 
-    /* 加半个末位单位以实现四舍五入 */
     double half = 0.5;
     for (int i = 0; i < prec; i++) half *= 0.1;
     v += half;
 
-    unsigned long ip   = (unsigned long)v;   /* 整数部分 (溢出风险: 超 ~4.29e9) */
+    unsigned long ip   = (unsigned long)v;
     double        frac = v - (double)ip;
-
     emit_uint(c, ip, 10, 0);
 
     if (prec > 0) {
@@ -216,7 +258,6 @@ static void emit_float(fmt_ctx *c, double v, int prec)
     }
 }
 
-/* 全功能: 支持 %c %s %d %i %u %x %X %f %% , %f 支持 "%.Nf" 精度, 支持 'l' 长度修饰 */
 int UART_Printf(UART_Port *port, const char *fmt, ...)
 {
     fmt_ctx c = { port, 0 };
@@ -225,15 +266,15 @@ int UART_Printf(UART_Port *port, const char *fmt, ...)
 
     for (; *fmt; fmt++) {
         if (*fmt != '%') { emit_c(&c, *fmt); continue; }
-        fmt++;                                  /* 跳过 '%' */
+        fmt++;
 
-        int prec = -1;                          /* 精度 (仅 %f 用) */
+        int prec = -1;
         if (*fmt == '.') {
             fmt++; prec = 0;
             while (*fmt >= '0' && *fmt <= '9') { prec = prec * 10 + (*fmt - '0'); fmt++; }
         }
 
-        int lng = 0;                            /* 长度修饰 'l' */
+        int lng = 0;
         while (*fmt == 'l') { lng++; fmt++; }
 
         switch (*fmt) {
@@ -249,7 +290,7 @@ int UART_Printf(UART_Port *port, const char *fmt, ...)
         case 's': emit_str(&c, va_arg(ap, const char *));       break;
         case 'f': case 'F': emit_float(&c, va_arg(ap, double), prec); break;
         case '%': emit_c(&c, '%');                              break;
-        case '\0': goto done;                   /* 结尾孤立的 '%' */
+        case '\0': goto done;
         default:  emit_c(&c, '%'); emit_c(&c, *fmt);            break;
         }
     }
@@ -258,8 +299,6 @@ done:
     return c.count;
 }
 
-/* 高性能精简版: 只支持 %c %s %d %u %x %% , 无浮点/宽度/精度/长度修饰。
- * 无 double 运算, 直接写环形缓冲, 适合高频/热路径打印。 */
 int UART_PrintfFast(UART_Port *port, const char *fmt, ...)
 {
     fmt_ctx c = { port, 0 };
@@ -284,39 +323,34 @@ done:
     return c.count;
 }
 
-/* 阻塞发送 (与 UART_Write 相同, 保留以兼容旧调用) */
 void UART_WriteBlocking(UART_Port *port, const uint8_t *data, uint16_t len)
 {
     UART_Write(port, data, len);
+    UART_TxFlush(port);
 }
 
-/* 阻塞等待发送完成 (移位寄存器发空) */
 void UART_TxFlush(UART_Port *port)
 {
-    while (DL_UART_isBusy(port->inst)) { /* 等待发完 */ }
+    while (ring_count(&port->tx) > 0 || DL_UART_isBusy(port->inst)) { }
 }
 
-/* TX FIFO 是否可写 (1=有空位, 0=满); 阻塞发送下意义有限 */
 uint16_t UART_TxFree(UART_Port *port)
 {
-    return DL_UART_isTXFIFOFull(port->inst) ? 0 : 1;
+    return ring_free(&port->tx);
 }
 
 /* ==================== 接收 ==================== */
 
-/* RX 缓冲中当前可读字节数 */
 uint16_t UART_Available(UART_Port *port)
 {
     return ring_count(&port->rx);
 }
 
-/* 取一个字节, 返回 1=有数据 0=空 (非阻塞) */
 int UART_ReadByte(UART_Port *port, uint8_t *b)
 {
     return ring_pop(&port->rx, b);
 }
 
-/* 取至多 len 字节到 buf, 返回实际读取数 */
 uint16_t UART_Read(UART_Port *port, uint8_t *buf, uint16_t len)
 {
     uint16_t n = 0;
@@ -325,7 +359,6 @@ uint16_t UART_Read(UART_Port *port, uint8_t *buf, uint16_t len)
     return n;
 }
 
-/* 查看下一个字节但不移除, 返回 1=有数据 0=空 */
 int UART_Peek(UART_Port *port, uint8_t *b)
 {
     UART_Ring *r = &port->rx;
@@ -334,15 +367,10 @@ int UART_Peek(UART_Port *port, uint8_t *b)
     return 1;
 }
 
-/* 读取一整行 (到 '\n', 含换行, 追加 '\0'):
- *   有完整行  -> 拷贝到 buf (上限 size-1) 并消费, 返回字符串长度
- *   无完整行  -> 不消费任何字节, 返回 0
- * 两趟处理: 先扫描定位 '\n', 再弹出, 避免半行占用 buf。 */
 int UART_ReadLine(UART_Port *port, char *buf, uint16_t size)
 {
     UART_Ring *r = &port->rx;
 
-    /* 第 1 趟: 扫描是否已有完整一行 (含 '\n') */
     uint16_t i = r->tail, n = 0;
     int found = 0;
     while (i != r->head) {
@@ -352,7 +380,6 @@ int UART_ReadLine(UART_Port *port, char *buf, uint16_t size)
     }
     if (!found) return 0;
 
-    /* 第 2 趟: 取出 n 字节 (含换行), 拷贝到 buf (上限 size-1) */
     uint16_t out = 0;
     for (uint16_t k = 0; k < n; k++) {
         uint8_t c;
@@ -364,39 +391,36 @@ int UART_ReadLine(UART_Port *port, char *buf, uint16_t size)
     return (int)out;
 }
 
-/* 丢弃 RX 缓冲中所有未读数据 */
 void UART_RxFlush(UART_Port *port)
 {
     port->rx.tail = port->rx.head;
 }
 
-/* ==================== 协议 framer ==================== */
+/* ==================== 协议 framer (纯主循环轮询) ==================== */
 
-/* 定长帧: [head][...][tail], 总长 frame_len */
 static uint16_t framer_fixed_feed(UART_Framer *f, uint8_t b)
 {
     if (f->idx == 0) {
         if (b == f->head) f->buf[f->idx++] = b;
     } else if (f->idx < (uint16_t)(f->frame_len - 1)) {
         f->buf[f->idx++] = b;
-    } else {  /* idx == frame_len-1, 期望帧尾 */
+    } else {
         if (b == f->tail) {
             f->buf[f->idx] = b;
             f->idx = 0;
-            return f->frame_len;   /* 完成 */
+            return f->frame_len;
         }
-        f->idx = 0;                /* 帧尾不符, 重新同步 */
+        f->idx = 0;
     }
     return 0;
 }
 
-/* 分隔帧: 累积到 delim (含) 为一帧 */
 static uint16_t framer_delim_feed(UART_Framer *f, uint8_t b)
 {
     if (f->idx < f->size)
         f->buf[f->idx++] = b;
     else
-        f->idx = 0;                /* 溢出, 丢弃重来 */
+        f->idx = 0;
 
     if (b == f->delim) {
         uint16_t len = f->idx;
@@ -406,62 +430,208 @@ static uint16_t framer_delim_feed(UART_Framer *f, uint8_t b)
     return 0;
 }
 
+static uint16_t framer_len_feed(UART_Framer *f, uint8_t b)
+{
+    if (f->idx == 0) {
+        if (b == f->head) f->buf[f->idx++] = b;
+        return 0;
+    }
+
+    if (f->idx < f->size)
+        f->buf[f->idx++] = b;
+    else
+        { f->idx = 0; return 0; }
+
+    uint16_t min_len = (uint16_t)f->len_offset + f->len_size + f->crc_size + 1 /*tail*/;
+    if (f->idx < min_len) return 0;
+
+    if (f->idx == min_len) {
+        /* 解析长度字段 */
+        f->payload_len = 0;
+        for (uint8_t k = 0; k < f->len_size; k++)
+            f->payload_len |= (uint16_t)f->buf[f->len_offset + k] << (8 * k);
+        if (f->payload_len == 0) { f->idx = 0; return 0; }
+    }
+
+    uint16_t total = min_len + f->payload_len;
+    if (f->idx >= total) {
+        if (f->buf[total - 1] == f->tail) {
+            f->idx = 0;
+            return total;
+        }
+        f->idx = 0;
+    }
+    return 0;
+}
+
 void UART_FramerInitFixed(UART_Framer *f, uint8_t *buf, uint16_t size,
                           uint8_t head, uint8_t tail, uint16_t frame_len)
 {
-    f->Feed      = framer_fixed_feed;
-    f->OnFrame   = 0;                  /* 由调用者赋值 */
-    f->buf       = buf;
-    f->size      = size;
-    f->idx       = 0;
-    f->head      = head;
-    f->tail      = tail;
-    f->frame_len = frame_len;
-    f->delim     = 0;
+    f->type       = UART_FRAMER_FIXED;
+    f->Feed       = framer_fixed_feed;
+    f->OnFrame    = 0;
+    f->buf        = buf;
+    f->size       = size;
+    f->idx        = 0;
+    f->head       = head;
+    f->tail       = tail;
+    f->frame_len  = frame_len;
+    f->delim      = 0;
 }
 
 void UART_FramerInitDelim(UART_Framer *f, uint8_t *buf, uint16_t size, uint8_t delim)
 {
-    f->Feed      = framer_delim_feed;
-    f->OnFrame   = 0;                  /* 由调用者赋值 */
-    f->buf       = buf;
-    f->size      = size;
-    f->idx       = 0;
-    f->head      = 0;
-    f->tail      = 0;
-    f->frame_len = 0;
-    f->delim     = delim;
+    f->type       = UART_FRAMER_DELIM;
+    f->Feed       = framer_delim_feed;
+    f->OnFrame    = 0;
+    f->buf        = buf;
+    f->size       = size;
+    f->idx        = 0;
+    f->head       = 0;
+    f->tail       = 0;
+    f->frame_len  = 0;
+    f->delim      = delim;
 }
 
-/* 完全自定义: feed 逐字节返回帧长, on_frame 完成回调; 状态由 feed 自行维护 */
+void UART_FramerInitLen(UART_Framer *f, uint8_t *buf, uint16_t size,
+                        uint8_t head, uint8_t tail,
+                        uint8_t len_offset, uint8_t len_size,
+                        uint8_t crc_offset, uint8_t crc_size)
+{
+    f->type        = UART_FRAMER_LEN;
+    f->Feed        = framer_len_feed;
+    f->OnFrame     = 0;
+    f->buf         = buf;
+    f->size        = size;
+    f->idx         = 0;
+    f->head        = head;
+    f->tail        = tail;
+    f->frame_len   = 0;
+    f->delim       = 0;
+    f->payload_len = 0;
+    f->len_offset  = len_offset;
+    f->len_size    = len_size;
+    f->crc_offset  = crc_offset;
+    f->crc_size    = crc_size;
+}
+
 void UART_FramerInitCustom(UART_Framer *f, UART_FramerFeedFn feed,
                            UART_FramerFrameFn on_frame)
 {
-    f->Feed      = feed;
-    f->OnFrame   = on_frame;
-    f->buf       = 0;
-    f->size      = 0;
-    f->idx       = 0;
-    f->head      = 0;
-    f->tail      = 0;
-    f->frame_len = 0;
-    f->delim     = 0;
+    f->type     = UART_FRAMER_CUSTOM;
+    f->Feed     = feed;
+    f->OnFrame  = on_frame;
+    f->buf      = 0;
+    f->size     = 0;
+    f->idx      = 0;
 }
 
-/* 挂载 framer: 挂载后该端口 RX 旁路环形缓冲, 字节直接喂 framer */
-void UART_AttachFramer(UART_Port *port, UART_Framer *f)
+void UART_FramerSetCallback(UART_Framer *f, UART_FramerFrameFn on_frame)
 {
-    f->idx = 0;
-    port->framer = f;
+    f->OnFrame = on_frame;
 }
 
-/* 卸载 framer: 回落到原始字节流 (走环形缓冲, 用 UART_Read* 读取) */
-void UART_DetachFramer(UART_Port *port)
+uint16_t UART_FramerPollBytes(UART_Framer *f, const uint8_t *data, uint16_t len)
 {
-    port->framer = 0;
+    uint16_t frames = 0;
+    for (uint16_t i = 0; i < len; i++) {
+        uint16_t flen = f->Feed(f, data[i]);
+        if (flen && f->OnFrame) {
+            f->OnFrame(f->buf, flen);
+            frames++;
+        }
+    }
+    return frames;
 }
 
-/* ==================== 错误 ==================== */
+uint16_t UART_FramerPoll(UART_Port *port)
+{
+    UART_Framer *f = port->framer;
+    if (!f) return 0;
+
+    uint16_t frames = 0;
+    uint16_t avail = ring_count(&port->rx);
+    for (uint16_t i = 0; i < avail; i++) {
+        uint8_t b;
+        if (ring_pop(&port->rx, &b)) {
+            uint16_t flen = f->Feed(f, b);
+            if (flen && f->OnFrame) {
+                f->OnFrame(f->buf, flen);
+                frames++;
+            }
+        }
+    }
+    return frames;
+}
+
+/* ==================== CRC16 ==================== */
+
+uint16_t UART_CRC16(const uint8_t *data, uint16_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (uint16_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t j = 0; j < 8; j++) {
+            if (crc & 0x8000)
+                crc = (uint16_t)((crc << 1) ^ 0x1021);
+            else
+                crc = (uint16_t)(crc << 1);
+        }
+    }
+    return crc;
+}
+
+/* ==================== 帧发送工具 ==================== */
+
+uint16_t UART_SendFrameFixed(UART_Port *port,
+                             uint8_t head, uint8_t tail,
+                             const uint8_t *payload, uint16_t len)
+{
+    UART_WriteByte(port, head);
+    if (payload && len)
+        UART_Write(port, payload, len);
+    UART_WriteByte(port, tail);
+    return len + 2;
+}
+
+uint16_t UART_SendFrameLenCRC(UART_Port *port,
+                              uint8_t head, uint8_t tail,
+                              uint8_t cmd, const uint8_t *payload, uint16_t len)
+{
+    /* 帧格式: head | len(2B LE) | cmd | payload | crc16(2B LE) | tail */
+    uint16_t data_len = (uint16_t)(len + 1);  /* cmd + payload */
+    uint16_t crc;
+
+    UART_WriteByte(port, head);
+
+    UART_WriteByte(port, (uint8_t)(data_len & 0xFF));
+    UART_WriteByte(port, (uint8_t)((data_len >> 8) & 0xFF));
+
+    UART_WriteByte(port, cmd);
+
+    if (payload && len)
+        UART_Write(port, payload, len);
+
+    /* 计算 CRC: 对 len|cmd|payload 字段 */
+    uint8_t crc_buf[258];  /* 2(len) + 1(cmd) + 255(max payload) */
+    crc_buf[0] = (uint8_t)(data_len & 0xFF);
+    crc_buf[1] = (uint8_t)((data_len >> 8) & 0xFF);
+    crc_buf[2] = cmd;
+    if (payload && len) {
+        for (uint16_t i = 0; i < len && i < 255; i++)
+            crc_buf[3 + i] = payload[i];
+    }
+    crc = UART_CRC16(crc_buf, (uint16_t)(3 + len));
+
+    UART_WriteByte(port, (uint8_t)(crc & 0xFF));
+    UART_WriteByte(port, (uint8_t)((crc >> 8) & 0xFF));
+
+    UART_WriteByte(port, tail);
+
+    return (uint16_t)(6 + len);  /* head(1)+len(2)+cmd(1)+payload+CRC(2)+tail(1) */
+}
+
+/* ==================== 错误与恢复 ==================== */
 
 const UART_Errors *UART_GetErrors(UART_Port *port)
 {
@@ -476,41 +646,73 @@ void UART_ClearErrors(UART_Port *port)
     port->err.parity      = 0;
 }
 
-/* ==================== ISR ==================== */
-
-/* 处理单个收到的字节: 挂了 framer 就喂 framer (完成则回调), 否则入环形缓冲 */
-static inline void rx_byte(UART_Port *p, uint8_t b)
+void UART_Recover(UART_Port *port)
 {
-    UART_Framer *f = p->framer;
-    if (f) {
-        uint16_t len = f->Feed(f, b);
-        if (len && f->OnFrame)
-            f->OnFrame(f->buf, len);
-    } else if (!ring_push(&p->rx, b)) {
-        p->err.rx_overflow++;      /* 环形缓冲满, 丢弃新字节 */
-    }
+    UART_Regs *inst = port->inst;
+
+    /* 停 RX/TX 外设中断 */
+    DL_UART_Main_disableInterrupt(inst, DL_UART_MAIN_INTERRUPT_RX);
+    DL_UART_Main_disableInterrupt(inst, DL_UART_MAIN_INTERRUPT_TX);
+    port->tx_int_en = 0;
+
+    /* 清硬件 FIFO */
+    while (!DL_UART_isRXFIFOEmpty(inst))
+        DL_UART_Main_receiveData(inst);
+    while (!DL_UART_isTXFIFOEmpty(inst))
+        (void)DL_UART_isTXFIFOEmpty(inst);
+
+    /* 清软件环形缓冲 */
+    UART_RxFlush(port);
+    port->tx.tail = port->tx.head;
+
+    /* 清错误计数 (不清零, 保留已累计数用于诊断) */
+    /* 刷一次 IIDX 清残留中断标志 */
+    while (DL_UART_Main_getPendingInterrupt(inst) != DL_UART_IIDX_NO_INTERRUPT) { }
+
+    /* 重新开 RX 中断 */
+    DL_UART_Main_enableInterrupt(inst, DL_UART_MAIN_INTERRUPT_RX);
+    NVIC_ClearPendingIRQ(port->irqn);
 }
 
-/* 通用 ISR 主体: 循环读 IIDX 直到无中断, 分别处理 RX/TX/错误。
- * 各具体 UARTx_IRQHandler 只需转调本函数 (全工程 ISR 唯一定义)。 */
+/* ==================== ISR (纯数据搬运, 零协议逻辑) ==================== */
+
+static inline void rx_byte_isr(UART_Port *p, uint8_t b)
+{
+    if (!ring_push(&p->rx, b))
+        p->err.rx_overflow++;
+}
+
 void UART_ISR_Handler(UART_Port *port)
 {
     UART_Regs *inst = port->inst;
     DL_UART_IIDX idx;
-    int loop_limit = 128;  /* 安全阀: 防止死循环 */
+    int loop_limit = 128;
 
     while (loop_limit-- > 0 &&
            (idx = DL_UART_Main_getPendingInterrupt(inst)) != DL_UART_IIDX_NO_INTERRUPT) {
         switch (idx) {
         case DL_UART_MAIN_IIDX_RX:
             while (!DL_UART_isRXFIFOEmpty(inst))
-                rx_byte(port, DL_UART_Main_receiveData(inst));
+                rx_byte_isr(port, DL_UART_Main_receiveData(inst));
+            break;
+
+        case DL_UART_MAIN_IIDX_TX:
+            while (!DL_UART_isTXFIFOFull(inst)) {
+                uint8_t b;
+                if (ring_pop(&port->tx, &b)) {
+                    DL_UART_Main_transmitData(inst, b);
+                } else {
+                    port->tx_int_en = 0;
+                    DL_UART_Main_disableInterrupt(inst, DL_UART_MAIN_INTERRUPT_TX);
+                    break;
+                }
+            }
             break;
 
         case DL_UART_IIDX_OVERRUN_ERROR:
             port->err.hw_overrun++;
             if (!DL_UART_isRXFIFOEmpty(inst))
-                (void)DL_UART_Main_receiveData(inst);   /* 读一次清错误 */
+                (void)DL_UART_Main_receiveData(inst);
             break;
 
         case DL_UART_IIDX_FRAMING_ERROR:
@@ -526,7 +728,6 @@ void UART_ISR_Handler(UART_Port *port)
             break;
 
         default:
-            /* 未知中断: 清掉所有可能的中断标志以防死循环 */
             (void)DL_UART_Main_getPendingInterrupt(inst);
             if (!DL_UART_isRXFIFOEmpty(inst))
                 (void)DL_UART_Main_receiveData(inst);

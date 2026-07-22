@@ -3,7 +3,7 @@
  * via the GUI or CLI. Run CLI with '--help' for additional information on how to override these arguments.
  * @cliArgs --device "MSPM0G350X" --part "Default" --package "LQFP-48(PT)" --product "mspm0_sdk@2.10.00.04"
  * @v2CliArgs --device "MSPM0G3507" --package "LQFP-48(PT)" --product "mspm0_sdk@2.10.00.04"
- * @versions {"tool":"1.26.2+4477"}
+ * @versions {"tool":"1.27.0+4565"}
  */
 
 /**
@@ -159,6 +159,7 @@ TIMER1.peripheral.$assign = "TIMG12";
 
 UART1.$name                    = "UART_0";
 UART1.targetBaudRate           = 115200;
+UART1.enabledInterrupts        = ["RX"];
 UART1.peripheral.rxPin.$assign = "PA11";
 UART1.peripheral.txPin.$assign = "PA10";
 UART1.txPinConfig.$name        = "ti_driverlib_gpio_GPIOPinGeneric2";

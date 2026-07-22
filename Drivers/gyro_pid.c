@@ -28,6 +28,7 @@ static struct {
     uint8_t init;
     uint8_t heading_locked;
     float last_yaw, last_corr;         /* 诊断直 */
+    float drift_offset;                /* 漂移补偿 (°/s) */
 } g_pid;
 
 /* ==================== 陀螺仪底层 ==================== */
@@ -74,8 +75,8 @@ float GyroPID_Update(float yaw_rate)
 {
     if (!g_pid.init) return 0.0f;
 
-    /* 低通滤波 */
-    float fyaw = Biquad_Process(&g_pid.lpf, yaw_rate);
+    /* 低通滤波, 减漂移补偿 */
+    float fyaw = Biquad_Process(&g_pid.lpf, (yaw_rate - g_pid.drift_offset));
     g_pid.last_yaw = fyaw;
 
     /* 积分航向: 右转 ω_z 为负, 取反使 heading 正值=右偏 */
@@ -130,3 +131,6 @@ void GyroPID_SetHeadingKp(float kp) { g_pid.Kp_h = kp; g_pid.integral = 0.0f; g_
 void GyroPID_SetHeadingKi(float ki) { g_pid.Ki_h = ki; g_pid.integral = 0.0f; g_pid.prev_error = 0.0f; }
 
 float GyroPID_GetHeading(void) { return g_pid.heading; }
+
+void  GyroPID_SetDriftOffset(float offset) { g_pid.drift_offset = offset; }
+float GyroPID_GetDriftOffset(void)          { return g_pid.drift_offset; }

@@ -1,84 +1,158 @@
-# 通用 UART 库设计方案 (Step 1 规格定稿)
+# UART 库架构设计 v2
 
-> 状态: **设计阶段** (尚未实现)。用于合并多个模块各自的 UART 实现。
-> 两轮决策后定稿: 双环形缓冲 + 内部静态分配 + 大写下划线命名 + framer 自定义协议。
+> 基于 v1 规格定稿，v2 新增 Framer 移出 ISR、多 UART 参数化、错误恢复、协议层 CRC/长度帧。
 
-## 1. 背景与冲突分析
+---
 
-多人代码各写各的 UART 实现, 合并时冲突:
+## 1. 架构
 
-| 冲突 | `empty.c` | `uart.c/h` |
-|------|-----------|------------|
-| UART0 RX 归属 | **轮询** `cmd_poll()` (`DL_UART_isRXFIFOEmpty`) | **中断** `UART_0_INST_IRQHandler` |
-| 发送助手 | `UART0_sendStr` / `UART0_printf` | `UART_Printf` / `UART_SendPacket` |
-| DL API 风格 | `DL_UART_transmitDataBlocking` | `DL_UART_Main_transmitDataBlocking` |
-| 结构 | 无 | 每实例静态缓冲、硬编码 UART0/1 |
+```
+         UART Hardware
+              │
+         ISR (纯数据搬运, 零协议逻辑)
+         ┌────┴────┐
+        RX         TX
+         │          │
+    rx ring     tx ring
+         │
+    主循环任务
+         ├── UART_Read* / ReadLine
+         ├── UART_FramerPoll()  (帧解析, OnFrame 回调)
+         └── UART_Write* / Printf / SendFrame
+```
 
-关键风险:
-- 两套同时驱动 UART0 会互相抢数据。
-- 多个模块各自定义 `UART_x_INST_IRQHandler` → **链接期符号重定义**。
-- `Drivers/README.md` 记录过 "PA11 浮空噪声触发 RX 中断死机才改的轮询", 直接开 UART0 RX 中断可能复现。
+### ISR 规则
 
-**根因**: 现有 `uart.c` 把传输层 (收发字节) 与应用协议层 (AA..BB 帧解析) 焊死, 无法通用。
+- **RX**: 硬件 FIFO → `ring_push`
+- **TX**: `ring_pop` → 硬件 FIFO
+- **禁止**: 调用 framer、printf、阻塞函数、复杂逻辑
+- **安全**: 最多循环 128 次，防止硬件异常死循环
 
-## 2. 全部决策汇总
+### 主循环规则
 
-| 维度 | 决策 |
-|------|------|
-| 缓冲分配 | 库内部 `static` 数组 + `#define UARTx_RX_SIZE / UARTx_TX_SIZE` 宏配置大小 |
-| 环形缓冲约束 | **强制 2 的幂** (位与取模, ISR 更快) |
-| 默认缓冲大小 | RX 256 / TX 256 字节 |
-| 实例策略 | **UART0 写死 (PA10&PA11)** 加全局 `g_uart0`; UART1 等通过宏开关 (`#define UART1_ENABLE`) 预留 |
-| TX 满策略 | 非阻塞入队, 返回实际入队字节数; 同时提供 `UART_WriteBlocking` 阻塞回退 |
-| RX 满策略 | 丢弃新字节 + 溢出计数 |
-| printf 策略 | 提供 `UART_Printf`, 栈缓冲 **128 字节**, **仅整数** (%f 不支持, 浮点用整数拆分) |
-| 旧 API 兼容 | **硬替换**, 同步修改所有调用处 |
-| 文件位置 | **移到 Drivers/uart.c + uart.h** |
-| API 命名 | **保留大写下划线 `UART_`** (延续现有 uart.h 风格) |
-| framer 分流 | 挂 framer 时 **旁路环形缓冲, 只喂 framer** (低延迟) |
-| 坐标包 AA..BB | **剥离到应用层**, 视觉模块用 `UART_FramerInitFixed` 自行构建 |
-| UART0 文本命令 | **不挂 framer, 原始环形缓冲 + UART_ReadLine** |
-| 阻塞发送 | **同时提供阻塞版 UART_WriteBlocking 作为回退** |
+- **RX 消费**: `UART_ReadByte/Read/ReadLine` 从 rx ring 取数据
+- **Framer**: `UART_FramerPoll()` 从 rx ring 取字节喂 framer，`OnFrame` 回调在主循环上下文
+- **TX 生产**: `UART_Write/WriteByte/Printf` 入 tx ring
+- **禁止**: 直接操作 FIFO（*除 TX Kick 例外*，见下文）
 
-## 3. 三层解耦架构
+---
 
-| 层 | 职责 | 说明 |
-|----|------|------|
-| L1 传输层 | 收发字节、环形缓冲、ISR 分发、错误统计 | 协议无关, MCU 通用核心 |
-| L2 工具层 | Write/Printf、Read/ReadLine/Peek | 基于端口句柄, 与硬件实例无关 |
-| L3 协议层 | 帧解析 (AA..BB / 行 / 自定义) | 各模块自定义 framer, 插在核心之上 |
+## 2. TX 中断与 Kick 机制
 
-端口对象 `UART_Port` 持有 `inst/irqn + rx/tx 环形缓冲 + framer + 错误计数`；UART0 写死为全局 `g_uart0`，UART1 等由 `UART1_ENABLE` 宏预留。
+### 问题
 
-> **API 与数据类型详见 [`README_UART.md`](README_UART.md)**，此处不重复。
+MSPM0 UART TX 中断是**边沿触发**：FIFO 从"满"下降到"阈值以下"才产生中断边沿。
 
-## 4. 各模块迁移方式
+```
+ISR 排空 ring → 关 TX 中断 → FIFO 排空
+→ 主循环入队 → enableInterrupt(TX)
+→ FIFO 已是空状态, 条件恒真, 无边沿 → ISR 永不触发
+```
 
-| 模块 | 原方式 | 迁移后 |
-|------|--------|--------|
-| `empty.c` 主循环 | `cmd_poll()` 轮询 FIFO | `UART_ReadLine(&g_uart0, ...)` 从环形缓冲读行 |
-| `empty.c` 发送 | `UART0_sendStr` / `UART0_printf` | `UART_Puts` / `UART_Printf` |
-| `empty.c` ISR | (无 UART ISR) | 由通用库的 `UART_0_INST_IRQHandler` 接管 |
-| 视觉模块 | `UART_ParsePacket` / `UART_SendPacket` | 用 `UART_FramerInitFixed` 构建 + `UART_Write` 发送, 全移掉自己的 ISR |
-| 视觉模块 ISR | `UART_1_INST_IRQHandler` | 由通用库的 `UART_1_INST_IRQHandler` 接管 |
+### 尝试过的方案
 
-## 5. 冲突消除要点
+| 方案 | 结果 | 原因 |
+|------|------|------|
+| `NVIC_SetPendingIRQ` 强制 pend | 失败 | ISR 内读 IIDX 得不到 TX 标志，MIS 已置位但无新边沿 |
+| 永不关闭 TX 中断 | 失败 | 边沿同样丢失 + 空转开销 |
 
-- 所有 UART ISR **只在通用库定义一次**; 其他模块一律不再写自己的 ISR。
-- AA..BB 坐标包协议**从核心剥离**; 视觉模块自行 `UART_FramerInitFixed` + `UART_AttachFramer`。
-- 统一 DL API 风格 (`DL_UART_Main_*`)。
-- UART0 文本命令使用原始环形缓冲 + `UART_ReadLine` (不挂 framer, 保持现有的行命令交互模式)。
+### Kick 方案 (当前)
 
-## 6. MCU 移植注意
+```
+主循环: ring_push → enableInterrupt(TX) → 若 FIFO 有空: ring_pop + transmitData
+ISR:    ring_pop → transmitData → ring空时 disableInterrupt(TX)
+```
 
-- 单生产者 (ISR) / 单消费者 (主循环) 环形缓冲, 用 `volatile` head/tail; TX 相反 (主生产 / ISR 消费)。
-- 环形缓冲强制 2 的幂, mask = size-1, ISR 内 `head = (head+1) & mask` (无除法)。
-- TI minimal printf 不支持 `%f`, 需整数拆分输出浮点。
-- ⚠️ PA11 浮空开 RX 中断会死机 (见 `Drivers/README.md`): 开中断前确认引脚上拉/接稳。
+Kick 直写 FIFO 一个字节 → 该字节移位排空 → 制造"FIFO 非空→空"边沿 → ISR 触发正常消费环形队列。
 
-## 7. 实施步骤
+**这是 MSPM0 平台特性导致的最小必要例外**，主循环仅在"启动传输链"时碰一次 FIFO，所有后续搬运仍由 ISR 完成。
 
-1. ~~规划通用 UART 功能~~ (本文档)
-2. 改写为通用 `Drivers/uart.c` + `Drivers/uart.h` 库实现
-3. 覆写原代码 (`empty.c`) 的 UART 实现, 迁移到通用库
-4. 导入另一模块 (视觉) 后, 再次用通用库覆写其 UART 实现
+---
+
+## 3. Framer 协议解析 (v2 变化)
+
+v1: ISR 内 `Feed` → `OnFrame` 回调在 ISR 上下文执行
+v2: ISR 只写 rx ring，主循环 `UART_FramerPoll()` 逐字节喂 framer，`OnFrame` 在主循环上下文
+
+| 版本 | Framer 运行位置 | 限制 |
+|------|----------------|------|
+| v1 | ISR 上下文 | 回调不能做耗时操作 (printf/计算) |
+| v2 | 主循环上下文 | 无限制，可做任意操作 |
+
+### 使用方式
+
+```c
+// 初始化 framer
+UART_FramerInitFixed(&framer, buf, 64, 0xAA, 0xBB, 7);
+UART_FramerSetCallback(&framer, on_frame);
+
+// 主循环中轮询
+while (1) {
+    UART_FramerPoll(&g_uart0);  // 从 rx ring 取数据喂 framer
+}
+```
+
+### Framer 类型
+
+| 类型 | 初始化函数 | 帧格式 |
+|------|-----------|--------|
+| `FIXED` | `UART_FramerInitFixed` | head + ... + tail (定长) |
+| `DELIM` | `UART_FramerInitDelim` | ... + delim (变长分隔) |
+| `LEN` | `UART_FramerInitLen` | head + len + payload + crc + tail |
+| `CUSTOM` | `UART_FramerInitCustom` | 自定义 feed 函数 |
+
+---
+
+## 4. 多 UART 参数化 (v2 变化)
+
+v1: `UART_RxEnable()` / `UART_RxDisable()` 硬编码 `UART_0_INST`
+v2: 接受 `UART_Port *port` 参数，可复用到任意实例
+
+```c
+// v1
+UART_RxEnable();
+
+// v2
+UART_RxEnable(&g_uart0);
+UART_RxEnable(&g_uart1);  // 需 #define UART1_ENABLE
+```
+
+---
+
+## 5. 错误恢复 `UART_Recover()`
+
+异常恢复流程：
+1. 关 RX/TX 外设中断
+2. 清硬件 RX FIFO
+3. 清软件环形缓冲 (rx + tx)
+4. 刷 IIDX 清残留中断标志
+5. 重开 RX 中断
+
+适用场景：长时间通信异常后恢复、协议同步丢失、FIFO 溢出链式错误。
+
+---
+
+## 6. SysConfig 配置注意
+
+### UART 实例宏
+
+SysConfig 生成的宏 (例 `UART_0` 命名):
+```c
+#define UART_0_INST               UART0          // 寄存器基址
+#define UART_0_INST_IRQHandler    UART0_IRQHandler  // ISR 函数名
+#define UART_0_INST_INT_IRQN      UART0_INT_IRQn    // NVIC 中断号
+```
+
+库代码通过 `UART_0_INST` / `UART_0_INST_INT_IRQN` 引用，依赖 SysConfig 生成。如果 SysConfig 中 UART 实例改名，需同步检查这些宏。
+
+### enabledInterrupts
+
+`.syscfg` 中 `UART1.enabledInterrupts` 应设为 `["RX"]`（不含 TX）：
+- RX: 由 SysConfig 初始化时开启，`UART_RxEnable()` 接管
+- TX: 完全由库动态管理 (enable on data / disable on empty)
+
+若 SysConfig 开启了 TX 中断，库的 `port_setup()` 会防御性关闭。
+
+### ISR 符号冲突
+
+SysConfig 可能生成弱符号 `UART_0_INST_IRQHandler` (即 `UART0_IRQHandler`)。库的 `uart.c` 定义**强符号**，链接器优先选择。若有多个目标文件定义同名函数，链接报错 `symbol multiply defined`。

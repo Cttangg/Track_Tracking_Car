@@ -13,7 +13,8 @@
  * Steering_GetCorrection() 直接用作 trajectory_set_feedback() 的回调参数。
  * ============================================================ */
 
-#define STEERING_LOST_THRESHOLD 50    /* 线丢失 50 次(500ms)后切陀螺仪 */
+#define STEERING_LOST_THRESHOLD 10    /* 线丢失 10 次(100ms)后切陀螺仪 */
+#define STEERING_FOUND_THRESHOLD 10   /* 线重新出现 10 次(100ms)后切回循线 */
 
 void  Steering_Init(void);
 float Steering_GetCorrection(void);    /* traj_feedback_fn 回调 */

@@ -36,9 +36,11 @@ typedef enum {
 typedef struct {
     seg_type_t type;
     float      R;          /* 圆弧半径 (m); 直线段忽略 */
-    float      length;     /* 圆弧: 弧度 theta(rad) / 直线: 距离 distance(m) */
+    float      length;     /* 圆弧/旋转: theta(rad) / 直线: distance(m) */
     float      v;          /* 段线速度 (m/s, > 0) */
-    int        direction;  /* 圆弧: +1/-1; 直线段忽略 */
+    int        direction;  /* 圆弧/旋转: +1/-1; 直线段忽略 */
+    uint8_t    use_line;   /* 1=启用灰度循线反馈 */
+    uint8_t    gyro_stop;  /* 1=陀螺仪角度停止, 0=时间倒数 */
 } traj_segment_t;
 
 /* ---- 运行状态 ---- */
@@ -65,8 +67,14 @@ int trajectory_run_path(const traj_segment_t *segs, uint8_t num, uint8_t loop);
 int trajectory_arc(float R, float theta, float v_target, int direction);
 int trajectory_circle(float R, float v_target, int direction);   /* loop 圆周 */
 int trajectory_straight(float distance, float v_target);
+int trajectory_straight_openloop(float distance, float v_target); /* 开环直行,无反馈 */
 int trajectory_linefollow(float v_target);  /* 循迹模式: 指定速度, 闭环循线 */
 int trajectory_rotate(float theta, float v_target, int direction); /* 原地旋转, 陀螺仪闭环 */
+
+/* 预置混合赛道 */
+int trajectory_mix1(void);  /* 4段: 直1m→CW半圆→直1m→CW半圆 闭合 */
+// int trajectory_mix2(void);  /* 预留 */
+// int trajectory_mix3(void);  /* 预留 */
 
 void trajectory_stop(void);
 
