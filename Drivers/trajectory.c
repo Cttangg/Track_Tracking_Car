@@ -9,7 +9,7 @@
 #define WHEEL_BASE     0.14f     /* 左右轮距 L (m) */
 #define WHEEL_RADIUS   0.024f    /* 轮子半径 (m), 直径 0.048m */
 #define GEAR_RATIO     20.0f     /* 减速比 1:20, 电机轴 = 输出轴 × 20 */
-#define CTRL_DT        0.02f     /* 控制周期 (s), 实际 BUSCLK=40MHz → TIMG12=20ms */
+#define CTRL_DT        0.01f     /* 控制周期 (s), 与 TIMG12 10ms ISR 一致 */
 
 #define PI_F           3.1415926f
 
@@ -158,6 +158,22 @@ int trajectory_arc(float R, float theta, float v_target, int direction)
     return trajectory_run_path(&g_single, 1, 0);
 }
 
+int trajectory_arc_openloop(float R, float theta, float v_target, int direction)
+{
+    if (R <= 0.0f || theta <= 0.0f || v_target <= 0.0f ||
+        (direction != 1 && direction != -1))
+        return -1;
+
+    g_single.type      = SEG_ARC;
+    g_single.R         = R;
+    g_single.length    = theta;
+    g_single.v         = v_target;
+    g_single.direction = direction;
+    g_single.use_line  = 0;
+    g_single.gyro_stop = 0;
+    return trajectory_run_path(&g_single, 1, 0);
+}
+
 int trajectory_circle(float R, float v_target, int direction)
 {
     if (R <= 0.0f || v_target <= 0.0f ||
@@ -170,6 +186,22 @@ int trajectory_circle(float R, float v_target, int direction)
     g_single.v         = v_target;
     g_single.direction = direction;
     return trajectory_run_path(&g_single, 1, 1);   /* loop = 持续圆周 */
+}
+
+int trajectory_circle_openloop(float R, float v_target, int direction)
+{
+    if (R <= 0.0f || v_target <= 0.0f ||
+        (direction != 1 && direction != -1))
+        return -1;
+
+    g_single.type      = SEG_ARC;
+    g_single.R         = R;
+    g_single.length    = 2.0f * PI_F;
+    g_single.v         = v_target;
+    g_single.direction = direction;
+    g_single.use_line  = 0;
+    g_single.gyro_stop = 0;
+    return trajectory_run_path(&g_single, 1, 1);   /* loop = 持续圆周, 开环 */
 }
 
 int trajectory_straight(float distance, float v_target)
@@ -229,6 +261,22 @@ int trajectory_rotate(float theta, float v_target, int direction)
     g_single.length    = theta;
     g_single.v         = v_target;
     g_single.direction = direction;
+    return trajectory_run_path(&g_single, 1, 0);
+}
+
+int trajectory_rotate_openloop(float theta, float v_target, int direction)
+{
+    if (theta <= 0.0f || v_target <= 0.0f ||
+        (direction != 1 && direction != -1))
+        return -1;
+
+    g_single.type      = SEG_ROTATE;
+    g_single.R         = 0.0f;
+    g_single.length    = theta;
+    g_single.v         = v_target;
+    g_single.direction = direction;
+    g_single.use_line  = 0;
+    g_single.gyro_stop = 0;
     return trajectory_run_path(&g_single, 1, 0);
 }
 

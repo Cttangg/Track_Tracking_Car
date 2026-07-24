@@ -15,7 +15,7 @@
 
 ---
 
-## 命令速查表（共 32 条）
+## 命令速查表（共 36 条）
 
 ### 状态查询
 
@@ -47,11 +47,17 @@
 | 命令 | 参数 | 示例 | 函数 |
 |------|------|------|------|
 | `st` | `<距离m> <速度m/s>` | `st 0.5 0.1` | `trajectory_straight` |
+| `st_open` | `<距离m> <速度m/s>` | `st_open 1.0 0.2` | `trajectory_straight_openloop` (纯开环直行) |
 | `arc` | `<R_m> <theta_rad> <速度> <方向±1>` | `arc 0.3 3.14 0.1 1` | `trajectory_arc` |
+| `arc_open` | `<R_m> <theta_rad> <速度> <方向±1>` | `arc_open 0.3 3.14 0.1 1` | `trajectory_arc_openloop` (纯开环圆弧) |
 | `cir` | `<R_m> <速度> <方向±1>` | `cir 0.5 0.1 -1` | `trajectory_circle` |
+| `cir_open` | `<R_m> <速度> <方向±1>` | `cir_open 0.5 0.1 -1` | `trajectory_circle_openloop` (纯开环圆周) |
 | `lf` | `<速度m/s>` | `lf 0.3` | `trajectory_linefollow` (闭环循线, 无限) |
 | `rot` | `<theta_rad> <速度> <方向±1>` | `rot 3.14 0.2 1` | `trajectory_rotate` (原地旋转, 陀螺仪闭环) |
+| `rot_open` | `<theta_rad> <速度> <方向±1>` | `rot_open 3.14 0.2 1` | `trajectory_rotate_openloop` (纯开环旋转) |
 | `stop_all` | 无 | `stop_all` | `trajectory_stop` (轨迹停车) |
+
+> `_open` 后缀命令显式禁用 `use_line`/`gyro_stop`，确保纯开环前馈，不受之前命令残留状态影响。
 
 ### 传感器
 
@@ -90,8 +96,9 @@ M2: Tr=xxx RPM=xxx D=xxx F=xxx
 --- HELP ---
 Motor: Tr1|Tr2 <rpm>  Kp1|Kp2 <v>  Ki1|Ki2 <v>  Kd1|Kd2 <v>
        Dd1|Dd2 <dut>  stop1|stop2  Tr <rpm>  Dd <dut>  stop
-Traj:  st <dist> <v>  arc <R> <th> <v> <dir>  cir <R> <v> <dir>
-       rot <th> <v> <dir>  lf <v>  stop_all
+Traj:  st <dist> <v>  st_open <dist> <v>  arc <R> <th> <v> <dir>
+       arc_open <R> <th> <v> <dir>  cir <R> <v> <dir>  cir_open <R> <v> <dir>
+       rot <th> <v> <dir>  rot_open <th> <v> <dir>  lf <v>  stop_all
 Sensor: gs  imu
 Gyro:  diag  lock 0|1  Gh|Gi_h <v>
 Steer: Lp|Li|Ld <v>  Gp|Gi|Gd <v>  mode 0|1
@@ -121,7 +128,7 @@ Steer: Lp|Li|Ld <v>  Gp|Gi|Gd <v>  mode 0|1
 3. `gs` → 灰度状态
 4. `imu` / `diag` → 陀螺仪诊断
 5. PID 参数 (`Lp/Li/Ld/Gp/Gi/Gd/Gh/Gi_h/mode/lock`)
-6. 轨迹 (`st/arc/cir/lf/rot`)
+6. 轨迹 (`st/st_open/arc/arc_open/cir/cir_open/lf/rot/rot_open`)
 7. 双电机 (`stop/Tr/Dd` 无后缀)
 8. 单电机 (`Tr1/Tr2/Kp1/Kp2/...` 末尾数字提取 motorID)
 9. 无匹配 → 错误
@@ -159,6 +166,14 @@ arc 0.3 3.14 0.1 -1     → 半径 0.3m 半圆右转
 ```
 rot 3.14 0.2 1           → CCW 半圈 (π rad) @ 0.2m/s, 陀螺仪闭环
 rot 1.57 0.2 -1          → CW 90° @ 0.2m/s
+```
+
+### 纯开环测试 (无反馈)
+```
+st_open 1.0 0.2           → 纯开环直行 1m @ 0.2m/s, 不叠加任何修正
+arc_open 0.3 3.14 0.1 1     → 纯开环圆弧, 半径 0.3m 半圆左转
+cir_open 0.5 0.1 -1         → 纯开环圆周, 半径 0.5m CW
+rot_open 3.14 0.2 1         → 纯开环旋转, CCW 半圈, 无陀螺仪闭环
 ```
 
 ### 闭环循迹调参

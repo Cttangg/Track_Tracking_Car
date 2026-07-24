@@ -23,7 +23,7 @@
 
 /* ===== 缓冲区配置 (字节, 必须为 2 的幂) ===== */
 #define UART0_RX_SIZE   256
-#define UART0_TX_SIZE   256
+#define UART0_TX_SIZE   512
 
 /* 预留: 取消注释启用 UART1 (需 SysConfig 先添加 UART_1_INST) */
 /* #define UART1_ENABLE */
@@ -149,6 +149,9 @@ uint16_t UART_SendFrameLenCRC(UART_Port *port,
 const UART_Errors *UART_GetErrors(UART_Port *port);
 void               UART_ClearErrors(UART_Port *port);
 void               UART_Recover(UART_Port *port);
+
+/* ===== 调试 ===== */
+void UART_DumpDebug(UART_Port *port);
 
 /* ===== ISR (全工程唯一定义) ===== */
 void UART_ISR_Handler(UART_Port *port);

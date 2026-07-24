@@ -25,4 +25,14 @@ float GyroPID_Update(float yaw_rate);
 void  GyroPID_SetDriftOffset(float offset);  /* °/s */
 float GyroPID_GetDriftOffset(void);
 
+/* 航向锁定 */
+void  GyroPID_EnableHeadingLock(uint8_t enable);
+void  GyroPID_SetHeadingKp(float kp);
+void  GyroPID_SetHeadingKi(float ki);
+float GyroPID_GetHeading(void);
+
+/* 诊断 */
+float GyroPID_GetLastYawRate(void);
+float GyroPID_GetLastCorrection(void);
+
 #endif

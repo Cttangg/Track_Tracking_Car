@@ -65,11 +65,14 @@ int trajectory_run_path(const traj_segment_t *segs, uint8_t num, uint8_t loop);
 /* ==================== 单段便捷 API (内部转为单段路径) ==================== */
 
 int trajectory_arc(float R, float theta, float v_target, int direction);
+int trajectory_arc_openloop(float R, float theta, float v_target, int direction);  /* 开环圆弧,无反馈 */
 int trajectory_circle(float R, float v_target, int direction);   /* loop 圆周 */
+int trajectory_circle_openloop(float R, float v_target, int direction); /* 开环圆周,无反馈 */
 int trajectory_straight(float distance, float v_target);
 int trajectory_straight_openloop(float distance, float v_target); /* 开环直行,无反馈 */
 int trajectory_linefollow(float v_target);  /* 循迹模式: 指定速度, 闭环循线 */
 int trajectory_rotate(float theta, float v_target, int direction); /* 原地旋转, 陀螺仪闭环 */
+int trajectory_rotate_openloop(float theta, float v_target, int direction); /* 开环旋转,无反馈 */
 
 /* 预置混合赛道 */
 int trajectory_mix1(void);  /* 4段: 直1m→CW半圆→直1m→CW半圆 闭合 */

@@ -230,6 +230,7 @@ static void cmd_do(const char *line) {
             GyroPID_GetHeading(), 1);
         return;
     }
+    if (!strcmp(k, "udbg")) { UART_DumpDebug(&g_uart0); return; }
     if (sscanf(line, "%*s %f", &v1) >= 1) {
         if (!strcmp(k, "Gh")) { GyroPID_SetHeadingKp(v1); UART_Printf(&g_uart0, "OK Gh=%.3f\r\n", v1); return; }
         if (!strcmp(k, "Gi_h")) { GyroPID_SetHeadingKi(v1); UART_Printf(&g_uart0, "OK Gi_h=%.3f\r\n", v1); return; }
@@ -286,6 +287,27 @@ static void cmd_do(const char *line) {
             trajectory_straight_openloop(v1, v2);
             UART_Printf(&g_uart0, "OK openloop d=%.2f v=%.2f\r\n", v1, v2);
         } else UART_Puts(&g_uart0, "ERR: st_open <dist> <speed>\r\n");
+        return;
+    }
+    if (!strcmp(k, "arc_open")) {
+        if (sscanf(line, "arc_open %f %f %f %d", &v1, &v2, &v3, &dir) == 4) {
+            trajectory_arc_openloop(v1, v2, v3, dir);
+            UART_Printf(&g_uart0, "OK arc_open R=%.2f th=%.2f v=%.2f d=%d\r\n", v1, v2, v3, dir);
+        } else UART_Puts(&g_uart0, "ERR: arc_open <R_m> <th_rad> <spd> <dir>\r\n");
+        return;
+    }
+    if (!strcmp(k, "cir_open")) {
+        if (sscanf(line, "cir_open %f %f %d", &v1, &v2, &dir) == 3) {
+            trajectory_circle_openloop(v1, v2, dir);
+            UART_Printf(&g_uart0, "OK cir_open R=%.2f v=%.2f d=%d\r\n", v1, v2, dir);
+        } else UART_Puts(&g_uart0, "ERR: cir_open <R_m> <spd> <dir>\r\n");
+        return;
+    }
+    if (!strcmp(k, "rot_open")) {
+        if (sscanf(line, "rot_open %f %f %d", &v1, &v2, &dir) == 3) {
+            trajectory_rotate_openloop(v1, v2, dir);
+            UART_Printf(&g_uart0, "OK rot_open th=%.2f v=%.2f d=%d\r\n", v1, v2, dir);
+        } else UART_Puts(&g_uart0, "ERR: rot_open <theta_rad> <speed> <dir>\r\n");
         return;
     }
     if (!strcmp(k, "odrift")) {

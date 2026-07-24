@@ -130,6 +130,8 @@ void UART_RxDisable(UART_Port *port)
 
 /* ==================== 发送 (纯 ISR 搬运, 主循环不碰 FIFO) ==================== */
 
+static uint16_t g_tx_stall_cnt;   /* tx_byte 因 ring 满阻塞的次数 */
+
 /*
  * TX Kick 机制说明:
  * ───────────────────────────────────────────────
@@ -166,6 +168,7 @@ static inline void tx_byte(UART_Port *p, uint8_t b)
 {
     while (!ring_push(&p->tx, b)) {
         /* 环形满, 触发 ISR 消费 */
+        g_tx_stall_cnt++;
         if (!p->tx_int_en) {
             p->tx_int_en = 1;
             DL_UART_Main_enableInterrupt(p->inst, DL_UART_MAIN_INTERRUPT_TX);
@@ -672,6 +675,53 @@ void UART_Recover(UART_Port *port)
     /* 重新开 RX 中断 */
     DL_UART_Main_enableInterrupt(inst, DL_UART_MAIN_INTERRUPT_RX);
     NVIC_ClearPendingIRQ(port->irqn);
+}
+
+/* ==================== 调试 ==================== */
+
+/* ==================== 调试 ==================== */
+
+static char *u32toa(char *p, unsigned long v)
+{
+    char tmp[11]; int i = 0;
+    if (v == 0) tmp[i++] = '0';
+    while (v) { tmp[i++] = (char)('0' + (v % 10)); v /= 10; }
+    while (i) *p++ = tmp[--i];
+    return p;
+}
+
+static char *ustr(char *p, const char *s)
+{
+    while (*s) *p++ = *s++;
+    return p;
+}
+
+void UART_DumpDebug(UART_Port *port)
+{
+    char b[160], *p = b;
+    uint16_t rx_used = ring_count(&port->rx);
+    uint16_t tx_used = ring_count(&port->tx);
+    uint16_t tx_cap  = (uint16_t)(port->tx.mask);
+
+    p = ustr(p, "\r\n--- UART DEBUG ---\r\n");
+    p = ustr(p, "TX ring:  "); p = u32toa(p, tx_used);
+    p = ustr(p, "/");           p = u32toa(p, tx_cap);
+    p = ustr(p, " used (");     p = u32toa(p, tx_cap ? (tx_used * 100U / tx_cap) : 0);
+    p = ustr(p, "%)\r\n");
+    p = ustr(p, "RX ring:  "); p = u32toa(p, rx_used);
+    p = ustr(p, "/");           p = u32toa(p, port->rx.mask);
+    p = ustr(p, " used\r\n");
+    p = ustr(p, "TX stall: ");  p = u32toa(p, g_tx_stall_cnt);
+    p = ustr(p, "\r\n");
+    p = ustr(p, "Errors:   OE="); p = u32toa(p, (unsigned long)port->err.hw_overrun);
+    p = ustr(p, " FE=");         p = u32toa(p, (unsigned long)port->err.framing);
+    p = ustr(p, " PE=");         p = u32toa(p, (unsigned long)port->err.parity);
+    p = ustr(p, " OVF=");         p = u32toa(p, (unsigned long)port->err.rx_overflow);
+    p = ustr(p, "\r\n------------------\r\n");
+
+    UART_Write(port, (const uint8_t *)b, (uint16_t)(p - b));
+    UART_TxFlush(port);
+    g_tx_stall_cnt = 0;
 }
 
 /* ==================== ISR (纯数据搬运, 零协议逻辑) ==================== */
